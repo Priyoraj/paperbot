@@ -1,0 +1,358 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Request papers</title>
+<style>
+:root {
+  --bg: #f4f5f7; --card: #ffffff; --text: #1b1d21; --muted: #5d6470; --line: #dfe2e7;
+  --accent: #1f5fd1; --accent-text: #ffffff; --ok: #137333; --warn: #9a5b00; --bad: #b3261e;
+  --chip: #eef2fb; --focus: #8ab4f8;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #15171b; --card: #1f2227; --text: #e8eaed; --muted: #a2a8b3; --line: #343841;
+    --accent: #8ab4f8; --accent-text: #0b1d3a; --ok: #81c995; --warn: #fdd663; --bad: #f28b82;
+    --chip: #263040; --focus: #8ab4f8;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text);
+  font: 16px/1.5 "Segoe UI", system-ui, -apple-system, Roboto, Helvetica, Arial, sans-serif; }
+main { max-width: 760px; margin: 0 auto; padding: 32px 16px 48px; }
+h1 { font-size: 28px; line-height: 1.2; margin: 0 0 6px; }
+h2 { font-size: 18px; margin: 0 0 12px; }
+p { margin: 0 0 12px; }
+.lead { color: var(--muted); margin-bottom: 22px; }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 12px;
+  padding: 20px; margin-bottom: 16px; }
+label { display: block; font-weight: 600; margin-bottom: 6px; }
+textarea, input[type=text] { width: 100%; font: inherit; color: inherit; background: transparent;
+  border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; }
+textarea { min-height: 150px; resize: vertical; font-family: Consolas, "SF Mono", Menlo, monospace;
+  font-size: 14px; }
+textarea:focus, input:focus, button:focus-visible { outline: 3px solid var(--focus);
+  outline-offset: 1px; }
+button { font: inherit; border-radius: 8px; border: 1px solid var(--line); background: var(--card);
+  color: var(--text); padding: 9px 16px; cursor: pointer; }
+button:hover { border-color: var(--accent); }
+button.primary { background: var(--accent); color: var(--accent-text); border-color: var(--accent);
+  font-weight: 600; }
+button.small { padding: 4px 10px; font-size: 14px; }
+button:disabled { opacity: .5; cursor: not-allowed; }
+.row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-top: 12px; }
+.hint { color: var(--muted); font-size: 14px; }
+ol#list { list-style: none; padding: 0; margin: 0; }
+ol#list > li { border-top: 1px solid var(--line); padding: 12px 0; display: grid;
+  grid-template-columns: 26px 1fr auto; gap: 4px 10px; align-items: start; }
+ol#list > li:first-child { border-top: 0; padding-top: 0; }
+.icon { font-size: 18px; line-height: 1.4; text-align: center; }
+.icon.ok { color: var(--ok); } .icon.warn { color: var(--warn); } .icon.bad { color: var(--bad); }
+.icon.wait { color: var(--muted); }
+.title { font-weight: 600; overflow-wrap: anywhere; }
+.meta { color: var(--muted); font-size: 14px; overflow-wrap: anywhere; }
+.choices { grid-column: 2 / 4; margin-top: 6px; display: grid; gap: 6px; }
+.choice { display: flex; gap: 10px; align-items: flex-start; background: var(--chip);
+  border-radius: 8px; padding: 8px 10px; }
+.choice .meta { display: block; }
+.remove { background: none; border: none; color: var(--muted); font-size: 20px; padding: 0 6px;
+  line-height: 1; }
+.send { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px;
+  margin-top: 16px; }
+.to { background: var(--chip); border-radius: 8px; padding: 10px 12px; font-size: 14px;
+  margin-top: 14px; overflow-wrap: anywhere; }
+#status { min-height: 1.5em; margin-top: 10px; font-weight: 600; }
+details summary { cursor: pointer; font-weight: 600; }
+#history li { margin: 6px 0; color: var(--muted); font-size: 14px; overflow-wrap: anywhere; }
+footer { color: var(--muted); font-size: 14px; margin-top: 24px; }
+footer li { margin: 4px 0; }
+</style>
+</head>
+<body>
+<main>
+  <h1 id="heading">Request papers</h1>
+  <p class="lead" id="lead">Paste the papers you need. The PDFs come back to you by email.</p>
+
+  <section class="card">
+    <label for="input">Papers you need: one per line</label>
+    <textarea id="input" spellcheck="false" placeholder="10.1109/cvpr.2016.90&#10;https://link.springer.com/article/10.1007/...&#10;arXiv:1706.03762&#10;Deep residual learning for image recognition"></textarea>
+    <div class="row">
+      <button class="primary" id="check">Look them up</button>
+      <span class="hint">DOIs work best. Links and exact titles are fine too.</span>
+    </div>
+  </section>
+
+  <section class="card" id="results" hidden>
+    <h2>Your request</h2>
+    <ol id="list"></ol>
+    <label for="note" style="margin-top:16px">Note (optional)</label>
+    <input type="text" id="note" placeholder="e.g. needed for my thesis chapter, thanks!">
+    <div class="to" id="to"></div>
+    <div class="send">
+      <button class="primary" data-via="gmail">Send with Gmail</button>
+      <button data-via="outlook">Send with Outlook</button>
+      <button data-via="mailto">Open my mail app</button>
+      <button data-via="copy">Copy the email</button>
+    </div>
+    <p class="hint" style="margin-top:10px">Your mail opens with everything filled in. Just press <b>Send</b> there.</p>
+    <div id="status" role="status" aria-live="polite"></div>
+  </section>
+
+  <section class="card" id="history-card" hidden>
+    <details>
+      <summary>Requests sent from this browser</summary>
+      <ul id="history"></ul>
+    </details>
+  </section>
+
+  <footer>
+    <ul id="how"></ul>
+  </footer>
+</main>
+
+<script>
+const CONFIG = /*CONFIG*/{"to": "you@example.com", "name": "your colleague", "subject": "Paper request"}/*END*/;
+
+const DOI_RE = /\b(10\.\d{4,9}\/[^\s"'<>]+)/i;
+const URL_RE = /https?:\/\/[^\s<>"']+/i;
+const ARXIV_URL_RE = /arxiv\.org\/(?:abs|pdf|html)\/(\d{4}\.\d{4,5}|[a-z][a-z\-]+(?:\.[a-z]{2})?\/\d{7})/i;
+const ARXIV_RE = /\barxiv\s*[:.]?\s*(\d{4}\.\d{4,5}(?:v\d+)?|[a-z][a-z\-]+(?:\.[a-z]{2})?\/\d{7}(?:v\d+)?)/i;
+const HISTORY_KEY = "paperbot-request-history";
+let items = [];
+
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+
+function setup() {
+  document.title = `Request papers from ${CONFIG.name}`;
+  $("heading").textContent = `Request papers from ${CONFIG.name}`;
+  $("lead").textContent = `Paste the papers you need. ${CONFIG.name}'s PaperBot emails you the PDFs.`;
+  $("to").innerHTML = `Goes to <b>${esc(CONFIG.to)}</b> with the subject <b>${esc(CONFIG.subject)}</b>.`;
+  $("how").innerHTML = [
+    `The first time you ask, ${esc(CONFIG.name)} confirms you're a colleague. After that it's automatic.`,
+    `PDFs usually arrive within 15 minutes. Some publishers need ${esc(CONFIG.name)} to download by hand, so those take longer.`,
+    `Nothing is installed. This page only looks papers up (via Crossref) and prepares the email in your own mail.`,
+  ].map(t => `<li>${t}</li>`).join("");
+  $("check").addEventListener("click", lookUpAll);
+  document.querySelectorAll("[data-via]").forEach(b => b.addEventListener("click", () => send(b.dataset.via)));
+  renderHistory();
+}
+
+function cleanDoi(d) {
+  try { d = decodeURIComponent(d); } catch (e) {}
+  d = d.replace(/[?#].*$/, "");
+  while (/[.,;:)\]}>'"]$/.test(d)) {
+    if (d.endsWith(")") && (d.match(/\(/g) || []).length >= (d.match(/\)/g) || []).length) break;
+    d = d.slice(0, -1);
+  }
+  return d.replace(/\/(full|abstract|pdf|epdf|pdfdirect)$/i, "").replace(/\.pdf$/i, "").toLowerCase();
+}
+
+function parseLine(line) {
+  line = line.trim().replace(/^(?:[-*•]|\(?\d{1,2}[.):])\s+/, "").replace(/^(?:paper\s+)?title\s*[:\-–]\s*/i, "");
+  if (!line) return null;
+  let m = line.match(URL_RE);
+  if (m) {
+    const url = m[0].replace(/[.,;)\]]+$/, "");
+    let n;
+    if ((n = url.match(ARXIV_URL_RE))) return { kind: "arxiv", value: n[1] };
+    let decoded = url; try { decoded = decodeURIComponent(url); } catch (e) {}
+    if ((n = decoded.match(DOI_RE))) return { kind: "doi", value: cleanDoi(n[1]) };
+    if ((n = url.match(/nature\.com\/articles\/([a-z0-9\-.]+)/i))) return { kind: "doi", value: "10.1038/" + n[1].toLowerCase() };
+    return { kind: "url", value: url };
+  }
+  if ((m = line.match(ARXIV_RE))) return { kind: "arxiv", value: m[1].replace(/v\d+$/, "") };
+  if ((m = line.match(DOI_RE))) return { kind: "doi", value: cleanDoi(m[1]) };
+  return { kind: "title", value: line.replace(/^["“”']+|["“”']+$/g, "").trim() };
+}
+
+function norm(t) { return String(t || "").replace(/<[^>]+>/g, " ").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim(); }
+function similarity(a, b) {           // Sørensen–Dice on character bigrams
+  a = norm(a); b = norm(b);
+  if (a === b) return 1;
+  if (a.length < 2 || b.length < 2) return 0;
+  const grams = new Map();
+  for (let i = 0; i < a.length - 1; i++) { const g = a.slice(i, i + 2); grams.set(g, (grams.get(g) || 0) + 1); }
+  let hits = 0;
+  for (let i = 0; i < b.length - 1; i++) { const g = b.slice(i, i + 2); const c = grams.get(g); if (c) { hits++; grams.set(g, c - 1); } }
+  return (2 * hits) / (a.length + b.length - 2);
+}
+function wordOrder(a, b) {            // longest common word subsequence, as a 0..1 ratio
+  a = norm(a).split(" "); b = norm(b).split(" ");
+  const dp = Array.from({ length: a.length + 1 }, () => new Array(b.length + 1).fill(0));
+  for (let i = 1; i <= a.length; i++)
+    for (let j = 1; j <= b.length; j++)
+      dp[i][j] = a[i - 1] === b[j - 1] ? dp[i - 1][j - 1] + 1 : Math.max(dp[i - 1][j], dp[i][j - 1]);
+  return (2 * dp[a.length][b.length]) / (a.length + b.length);
+}
+// "Attention is all you need" must not auto-match "Is attention all you need?":
+// pick automatically only when the title is essentially identical, otherwise ask.
+function score(a, b) { return similarity(a, b) * wordOrder(a, b); }
+function sameTitle(a, b) { return norm(a) === norm(b) || (similarity(a, b) >= 0.95 && wordOrder(a, b) >= 0.9); }
+
+function describe(rec) {
+  const authors = rec.author || [];
+  const first = authors[0] ? (authors[0].family || authors[0].name || "") : "";
+  const who = first ? (authors.length > 1 ? `${first} et al.` : first) : "";
+  const parts = (rec.issued && rec.issued["date-parts"] && rec.issued["date-parts"][0]) || [];
+  return { doi: String(rec.DOI || "").toLowerCase(), title: norm(rec.title && rec.title[0]) ? String(rec.title[0]).replace(/<[^>]+>/g, "") : "",
+           who, year: parts[0] || "", journal: (rec["container-title"] || [])[0] || "" };
+}
+
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+async function crossref(url) {
+  for (let attempt = 0; ; attempt++) {         // Crossref throttles bursts: retry politely
+    let r = null;
+    try { r = await fetch(url, { headers: { "Accept": "application/json" } }); } catch (e) {}
+    if (r && r.status === 404) return null;
+    if (r && r.ok) return (await r.json()).message;
+    if (attempt >= 2) throw new Error("lookup failed " + (r ? r.status : "offline"));
+    await sleep(1500 * (attempt + 1));
+  }
+}
+
+async function lookUp(it) {
+  try {
+    if (it.kind === "doi") {
+      const rec = await crossref("https://api.crossref.org/works/" + it.value.split("/").map(encodeURIComponent).join("/"));
+      if (rec) { it.meta = describe(rec); it.state = "ok"; }
+      else { it.state = "warn"; it.msg = "This DOI wasn't found. Please check it for typos (it's sent anyway)."; }
+    } else if (it.kind === "title") {
+      if (it.value.length < 8) { it.state = "bad"; it.msg = "Too short to identify. Please add the DOI or a link instead."; return; }
+      const res = await crossref("https://api.crossref.org/works?rows=12&select=DOI,title,author,issued,container-title,type&query.bibliographic=" + encodeURIComponent(it.value));
+      it.candidates = ((res && res.items) || []).map(describe).filter(c => c.title && c.doi);
+      it.candidates.sort((x, y) => score(it.value, y.title) - score(it.value, x.title));
+      const same = it.candidates.filter(c => sameTitle(it.value, c.title));
+      // exactly one record with this title: take it. Several (reprints, mirrors, chapters
+      // with the same name): let the colleague pick by authors / year / journal.
+      if (same.length === 1) { it.pick = same[0]; it.state = "ok"; }
+      else { it.state = "choose"; }
+    } else if (it.kind === "arxiv") {
+      it.state = "ok"; it.msg = "arXiv preprint";
+    } else {
+      it.state = "ok"; it.msg = `${CONFIG.name}'s PaperBot will open this link.`;
+    }
+  } catch (e) {
+    it.state = "unchecked"; it.msg = "Couldn't look this up right now (offline?). It's sent as written.";
+  }
+}
+
+async function lookUpAll() {
+  const lines = $("input").value.split(/\r?\n/);
+  const seen = new Set();
+  items = [];
+  for (const line of lines) {
+    const it = parseLine(line);
+    if (!it) continue;
+    const key = it.kind + ":" + it.value.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    it.state = "wait";
+    items.push(it);
+  }
+  if (!items.length) { $("input").focus(); return; }
+  if (items.length > 10) { items = items.slice(0, 10); }
+  $("results").hidden = false;
+  render();
+  $("check").disabled = true;
+  for (const it of items) { await lookUp(it); render(); }   // one at a time: Crossref is shared
+  $("check").disabled = false;
+  render();
+  $("results").scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+function line1(it) {
+  if (it.kind === "doi") return it.meta ? it.meta.title || it.value : it.value;
+  if (it.kind === "title") return it.pick ? it.pick.title : it.value;
+  if (it.kind === "arxiv") return "arXiv:" + it.value;
+  return it.value;
+}
+
+function metaLine(m) { return [m.who, m.year, m.journal, m.doi && "DOI " + m.doi].filter(Boolean).join(" · "); }
+
+function render() {
+  const icons = { ok: ["✓", "ok"], warn: ["!", "warn"], bad: ["✕", "bad"], choose: ["?", "warn"], wait: ["…", "wait"], unchecked: ["•", "wait"] };
+  $("list").innerHTML = items.map((it, i) => {
+    const [ic, cls] = icons[it.state] || icons.wait;
+    const meta = it.kind === "doi" && it.meta ? metaLine(it.meta) : (it.pick ? metaLine(it.pick) : (it.msg || (it.state === "wait" ? "Looking it up…" : "")));
+    let extra = "";
+    if (it.state === "choose") {
+      extra = `<div class="choices"><div class="meta">Which one did you mean?</div>` +
+        it.candidates.slice(0, 3).map((c, j) => `<div class="choice"><button class="small" data-pick="${i}:${j}">This one</button><div><span class="title">${esc(c.title)}</span><span class="meta">${esc(metaLine(c))}</span></div></div>`).join("") +
+        `<div class="choice"><button class="small" data-pick="${i}:-1">Send my title as typed</button><div class="meta">${esc(it.value)}</div></div></div>`;
+    } else if (it.kind === "title" && it.pick && it.candidates && it.candidates.length > 1) {
+      extra = `<div class="choices"><div><button class="small" data-unpick="${i}">Not this one?</button></div></div>`;
+    }
+    return `<li><div class="icon ${cls}" aria-hidden="true">${ic}</div>
+      <div><div class="title">${esc(line1(it))}</div><div class="meta">${esc(meta)}</div></div>
+      <button class="remove" title="Remove" aria-label="Remove" data-remove="${i}">×</button>${extra}</li>`;
+  }).join("");
+  $("list").querySelectorAll("[data-remove]").forEach(b => b.onclick = () => { items.splice(+b.dataset.remove, 1); render(); });
+  $("list").querySelectorAll("[data-pick]").forEach(b => b.onclick = () => {
+    const [i, j] = b.dataset.pick.split(":").map(Number);
+    const it = items[i];
+    if (j >= 0) { it.pick = it.candidates[j]; it.state = "ok"; } else { it.pick = null; it.state = "ok"; it.msg = "Sent as typed. PaperBot will search for it."; it.typed = true; }
+    render();
+  });
+  $("list").querySelectorAll("[data-unpick]").forEach(b => b.onclick = () => { const it = items[+b.dataset.unpick]; it.pick = null; it.state = "choose"; render(); });
+  const sendable = items.filter(it => it.state !== "bad" && it.state !== "choose" && it.state !== "wait");
+  const pending = items.some(it => it.state === "choose" || it.state === "wait");
+  document.querySelectorAll("[data-via]").forEach(b => b.disabled = !sendable.length || pending);
+  $("status").textContent = pending && items.some(it => it.state === "choose") ? "Pick the right paper for the lines marked ? first." : "";
+}
+
+function body() {
+  const lines = [];
+  for (const it of items) {
+    if (it.state === "bad" || it.state === "choose" || it.state === "wait") continue;
+    const meta = it.kind === "doi" ? it.meta : it.pick;
+    if (meta && meta.doi) {
+      const tail = meta.title ? " — " + meta.title.replace(/"/g, "'") + (meta.who ? ` (${meta.who}${meta.year ? ", " + meta.year : ""})` : "") : "";
+      lines.push(meta.doi + tail);
+    } else if (it.kind === "doi") lines.push(it.value);
+    else if (it.kind === "arxiv") lines.push("arXiv:" + it.value);
+    else if (it.kind === "url") lines.push(it.value);
+    else lines.push("Title: " + it.value);
+  }
+  const note = $("note").value.trim();
+  // PaperBot stops reading at the "--" line, so the note can't be mistaken for a paper.
+  return lines.join("\n") + "\n\n--\n" + (note ? note + "\n" : "") + "Sent with the paper request page";
+}
+
+async function send(via) {
+  const subject = CONFIG.subject, to = CONFIG.to, text = body();
+  const enc = encodeURIComponent;
+  if (via === "gmail") window.open(`https://mail.google.com/mail/?view=cm&fs=1&to=${enc(to)}&su=${enc(subject)}&body=${enc(text)}`, "_blank", "noopener");
+  else if (via === "outlook") window.open(`https://outlook.office.com/mail/deeplink/compose?to=${enc(to)}&subject=${enc(subject)}&body=${enc(text)}`, "_blank", "noopener");
+  else if (via === "mailto") window.location.href = `mailto:${to}?subject=${enc(subject)}&body=${enc(text)}`;
+  else {
+    const all = `To: ${to}\nSubject: ${subject}\n\n${text}`;
+    try { await navigator.clipboard.writeText(all); }
+    catch (e) { const t = document.createElement("textarea"); t.value = all; document.body.appendChild(t); t.select(); document.execCommand("copy"); t.remove(); }
+    $("status").textContent = "Copied. Paste it into a new email to " + to + ".";
+  }
+  if (via !== "copy") $("status").textContent = "Your email should be open now, ready to send. Press Send there.";
+  saveHistory(items.filter(it => it.state !== "bad" && it.state !== "choose").map(line1));
+}
+
+function saveHistory(list) {
+  try {
+    const h = JSON.parse(localStorage.getItem(HISTORY_KEY) || "[]");
+    h.unshift({ at: new Date().toISOString(), items: list });
+    localStorage.setItem(HISTORY_KEY, JSON.stringify(h.slice(0, 20)));
+  } catch (e) {}
+  renderHistory();
+}
+
+function renderHistory() {
+  let h = [];
+  try { h = JSON.parse(localStorage.getItem(HISTORY_KEY) || "[]"); } catch (e) {}
+  $("history-card").hidden = !h.length;
+  $("history").innerHTML = h.map(e => `<li><b>${esc(new Date(e.at).toLocaleString())}</b>: ${esc(e.items.join(" · "))}</li>`).join("");
+}
+
+setup();
+</script>
+</body>
+</html>

@@ -1,0 +1,90 @@
+"""Automatic mode = a Windows scheduled task that runs `paperbot run` every few minutes while
+you're logged in (needed for your saved VPN sign-in). Controlled from the app's Home page."""
+from __future__ import annotations
+
+import subprocess
+import sys
+from dataclasses import dataclass
+from datetime import datetime
+from pathlib import Path
+
+from .config import home_dir
+
+TASK = "PaperBot"
+NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+
+@dataclass
+class TaskStatus:
+    installed: bool
+    state: str = ""                  # Ready | Running | Disabled
+    last_run: datetime | None = None
+    next_run: datetime | None = None
+    last_result: int | None = None
+
+    @property
+    def on(self) -> bool:
+        return self.installed and self.state != "Disabled"
+
+
+def _ps(script: str, timeout: float = 60) -> subprocess.CompletedProcess:
+    return subprocess.run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command",
+                           script], capture_output=True, text=True, timeout=timeout,
+                          creationflags=NO_WINDOW)
+
+
+def _q(s: str) -> str:
+    """PowerShell single-quoted string."""
+    return "'" + str(s).replace("'", "''") + "'"
+
+
+def _time(s: str) -> datetime | None:
+    try:
+        t = datetime.fromisoformat(s.strip())
+    except ValueError:
+        return None
+    return t if t.year > 2000 else None  # Windows reports 1999-11-30 for "never"
+
+
+def status() -> TaskStatus:
+    cp = _ps(f"""$t = Get-ScheduledTask -TaskName {_q(TASK)} -ErrorAction SilentlyContinue
+if (-not $t) {{ 'NONE' }} else {{
+  $i = $t | Get-ScheduledTaskInfo
+  $l = if ($i.LastRunTime) {{ $i.LastRunTime.ToString('s') }} else {{ '' }}
+  $n = if ($i.NextRunTime) {{ $i.NextRunTime.ToString('s') }} else {{ '' }}
+  '{{0}}|{{1}}|{{2}}|{{3}}' -f $t.State, $l, $n, $i.LastTaskResult }}""")
+    out = cp.stdout.strip().splitlines()[-1] if cp.stdout.strip() else "NONE"
+    if out == "NONE" or "|" not in out:
+        return TaskStatus(installed=False)
+    state, last, nxt, result = (out.split("|") + ["", "", "", ""])[:4]
+    return TaskStatus(True, state, _time(last), _time(nxt),
+                      int(result) if result.strip().lstrip("-").isdigit() else None)
+
+
+def pythonw() -> Path:
+    exe = Path(sys.executable)
+    candidate = exe.with_name("pythonw.exe")
+    return candidate if candidate.exists() else exe
+
+
+def install(minutes: int = 10) -> None:
+    """Turn automatic mode on (re-installing replaces any older task)."""
+    root = home_dir()
+    script = f"""
+$action = New-ScheduledTaskAction -Execute {_q(pythonw())} -Argument '-m paperbot run' -WorkingDirectory {_q(root)}
+$trigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) -RepetitionInterval (New-TimeSpan -Minutes {int(minutes)})
+$settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -MultipleInstances IgnoreNew -RunOnlyIfNetworkAvailable -ExecutionTimeLimit (New-TimeSpan -Hours 2)
+$principal = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\\$env:USERNAME" -LogonType Interactive
+Register-ScheduledTask -TaskName {_q(TASK)} -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Description 'PaperBot: answers paper requests by email' -Force | Out-Null
+'OK'"""
+    cp = _ps(script, timeout=120)
+    if "OK" not in cp.stdout:
+        raise RuntimeError("Windows didn't accept the scheduled task: " +
+                           (cp.stderr.strip().splitlines() or ["unknown error"])[-1])
+
+
+def uninstall() -> None:
+    """Turn automatic mode off."""
+    cp = _ps(f"Unregister-ScheduledTask -TaskName {_q(TASK)} -Confirm:$false; 'OK'")
+    if "OK" not in cp.stdout and "No MSFT_ScheduledTask objects found" not in cp.stderr:
+        raise RuntimeError((cp.stderr.strip().splitlines() or ["unknown error"])[-1])

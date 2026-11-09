@@ -1,0 +1,8 @@
+.venv/
+data/
+config.toml
+__pycache__/
+*.egg-info/
+.pytest_cache/
+*.lnk
+Thumbs.db

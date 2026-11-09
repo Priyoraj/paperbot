@@ -1,0 +1,63 @@
+# PaperBot configuration.  Copy to config.toml (or run `paperbot init`) and fill in the blanks.
+# Passwords never go in this file: run `paperbot set-password mail` to store them in
+# Windows Credential Manager.
+
+[owner]
+name = ""                 # your name, used to sign replies, e.g. "Priya"
+email = ""                # where approval questions / alerts go; blank = the [mail] username
+
+[mail]
+username = ""             # the mailbox colleagues write to, e.g. you@gmail.com
+imap_host = "imap.gmail.com"
+imap_port = 993
+smtp_host = "smtp.gmail.com"
+smtp_port = 465
+mailbox = "INBOX"
+# An email counts as a paper request when its subject contains one of these (case-insensitive).
+subject_keywords = ["paper request"]
+lookback_days = 7         # how far back to look for unanswered requests
+signature = "(sent automatically by PaperBot)"
+
+[access]
+# true  = the first time someone new asks, you get an email "approve X?" and reply yes/no.
+# false = anyone who sends a request is served right away.
+# Toggle with:  paperbot approval on   /   paperbot approval off
+require_approval = true
+# Senders from these domains never need approval, e.g. ["university.edu"].
+auto_approve_domains = []
+# Daily safety limits for downloads through the institute's access (free copies don't count).
+# true = use the recommended safe values (30 a day in total, 10 of them kept for you, at most
+# 10 an hour, 5 per colleague, 20 s apart) and ignore the numbers below.
+# When a limit is reached, colleagues are asked to send the paper again tomorrow.
+use_recommended_limits = true
+max_papers_per_day = 30            # all institute downloads in a day, including your own
+own_reserve_per_day = 10           # kept for your own use; colleagues share the rest
+max_papers_per_hour = 10
+max_papers_per_person_per_day = 5
+max_items_per_email = 10
+reply_to_denied = false   # tell denied senders "no"? (default: stay silent)
+
+[vpn]
+enabled = true
+name = "Institute VPN"    # your Windows VPN connection name (Settings > Network & internet > VPN)
+# Turn the VPN off after the batch. PaperBot only turns it off if PaperBot turned it on,
+# so it never cuts a VPN session you started yourself.
+disconnect_when_done = true
+connect_timeout_s = 90
+# Only use the VPN between these hours (24h, local time). "00:00-24:00" = any time.
+# Example for overnight batches only: "22:00-07:00".
+allowed_hours = "00:00-24:00"
+
+[fetch]
+# Crossref and Unpaywall ask callers for a contact email. Unpaywall (the best open-access
+# index) refuses requests without one, so it is skipped while this is blank.
+contact_email = ""
+browser = "msedge"        # "msedge" or "chrome" (must be installed)
+headless = true           # false shows the browser window (handy for debugging)
+delay_between_publisher_requests_s = 20   # used when use_recommended_limits = false
+max_pdf_mb = 60
+max_attachment_mb = 18    # Gmail's limit is 25 MB after encoding; bigger sets are split across emails
+keep_pdfs_days = 30
+
+[schedule]
+poll_minutes = 10         # used by `paperbot watch` and the scheduled task installer
