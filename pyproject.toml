@@ -26,10 +26,10 @@ paperbot = "paperbot.cli:main"
 paperbot-app = "paperbot.gui:main"
 
 [tool.setuptools]
-packages = ["paperbot", "paperbot.gui"]
+packages = ["paperbot", "paperbot.gui", "paperbot.assets"]
 
 [tool.setuptools.package-data]
-paperbot = ["assets/*"]
+"paperbot.assets" = ["*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

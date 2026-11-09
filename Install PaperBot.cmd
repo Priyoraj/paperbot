@@ -17,8 +17,9 @@ if not exist ".venv\Scripts\python.exe" (
   %PY% -m venv .venv || goto :fail
 )
 echo Installing the parts PaperBot needs (a minute or two)...
-".venv\Scripts\python.exe" -m pip install --quiet --upgrade pip
-".venv\Scripts\python.exe" -m pip install --quiet -e . || goto :fail
+set "LOG=%TEMP%\paperbot-install.log"
+".venv\Scripts\python.exe" -m pip install --quiet --disable-pip-version-check --upgrade pip > "%LOG%" 2>&1
+".venv\Scripts\python.exe" -m pip install --quiet --disable-pip-version-check -e . >> "%LOG%" 2>&1 || (type "%LOG%" & goto :fail)
 echo Adding PaperBot to the Desktop and Start menu...
 ".venv\Scripts\python.exe" -m paperbot.shortcut || goto :fail
 echo.

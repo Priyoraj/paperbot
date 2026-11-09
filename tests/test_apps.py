@@ -48,6 +48,15 @@ def test_installer_zip_never_contains_private_files(tmp_path):
     assert not [n for n in names if "config.toml" in n or "/data/" in n or "__pycache__" in n]
 
 
+def test_installer_zip_gives_batch_files_windows_line_endings(tmp_path):
+    root = tmp_path / "proj"
+    (root / "paperbot").mkdir(parents=True)
+    (root / "paperbot" / "__init__.py").write_text("")
+    (root / "Install PaperBot.cmd").write_bytes(b"@echo off\ngoto :done\n:done\r\n")
+    zf = zipfile.ZipFile(make_zip(tmp_path / "out.zip", root))
+    assert zf.read("PaperBot/Install PaperBot.cmd") == b"@echo off\r\ngoto :done\r\n:done\r\n"
+
+
 def test_app_window_opens_and_every_screen_refreshes(tmp_path, monkeypatch):
     tk = pytest.importorskip("tkinter")
     monkeypatch.setenv("PAPERBOT_HOME", str(tmp_path))

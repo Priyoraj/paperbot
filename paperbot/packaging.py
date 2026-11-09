@@ -13,6 +13,8 @@ INCLUDE_DIRS = ["paperbot", "scripts", "tests"]
 SKIP_PARTS = {"__pycache__", ".pytest_cache", "data", ".venv"}
 SKIP_SUFFIX = {".pyc", ".pyo"}
 SKIP_NAMES = {"config.toml", "paperbot.lock"}
+# cmd.exe can fail to find labels (goto :fail) in batch files with Unix line endings.
+WINDOWS_SCRIPTS = {".cmd", ".bat"}
 
 
 def bundle_files(root: Path | None = None) -> list[Path]:
@@ -33,5 +35,10 @@ def make_zip(dest: Path, root: Path | None = None) -> Path:
     dest = Path(dest)
     with zipfile.ZipFile(dest, "w", zipfile.ZIP_DEFLATED) as z:
         for p in bundle_files(root):
-            z.write(p, Path("PaperBot") / p.relative_to(root))
+            arc = (Path("PaperBot") / p.relative_to(root)).as_posix()
+            if p.suffix.lower() in WINDOWS_SCRIPTS:
+                data = p.read_bytes().replace(b"\r\n", b"\n").replace(b"\n", b"\r\n")
+                z.writestr(arc, data)
+            else:
+                z.write(p, arc)
     return dest
