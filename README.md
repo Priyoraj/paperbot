@@ -96,7 +96,8 @@ Steps:
    - Set the mail app password. It's stored in Windows Credential Manager, never in a file.
    - Pick your VPN connection, which uses the password Windows saved for it.
    - Press **Check everything**.
-4. **Home.** Turn on **Automatic mode** to check mail every 10 minutes while you're logged in.
+4. **Home.** Turn on **Automatic mode**. PaperBot then checks mail 1 minute after you sign in to
+   Windows and every 10 minutes after that, even with its window closed.
 5. **Share with colleagues** saves the request page to send them. It can also save an installer
    zip for colleagues who have institutional access of their own.
 

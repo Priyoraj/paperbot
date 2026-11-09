@@ -160,15 +160,17 @@ class HomeTab:
             nxt = task.next_run.strftime("%H:%M") if task.next_run else "soon"
             problem = task.last_result not in (None, 0, 267009, 267011)  # running / never run
             self.auto_text.configure(
-                text=f"On - PaperBot checks your mail every {cfg.poll_minutes} minutes while "
-                     f"you're logged in, even when this window is closed.\nLast check: {last}"
+                text=f"On - PaperBot checks your mail every {cfg.poll_minutes} minutes, starting "
+                     f"1 minute after you sign in to Windows, even when this window is closed."
+                     f"\nLast check: {last}"
                      f"{' (had a problem - see Recent activity)' if problem else ''}"
                      f"  ·  next: {nxt}")
             self.auto_btn.configure(text="Turn off", style="TButton")
         else:
             self.auto_text.configure(
                 text="Off - requests are only handled when you press \"Check mail now\".\n"
-                     "Turn it on to answer requests automatically while you're logged in.")
+                     "Turn it on to answer requests automatically, starting 1 minute after you "
+                     "sign in to Windows.")
             self.auto_btn.configure(text="Turn on", style="Accent.TButton")
 
         entries = read_activity(cfg.data_dir / "logs" / "paperbot.log")

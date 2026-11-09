@@ -1,5 +1,6 @@
 """Automatic mode = a Windows scheduled task that runs `paperbot run` every few minutes while
-you're logged in (needed for your saved VPN sign-in). Controlled from the app's Home page."""
+you're logged in (needed for your saved VPN sign-in), and one minute after you sign in to
+Windows. Controlled from the app's Home page."""
 from __future__ import annotations
 
 import subprocess
@@ -11,6 +12,7 @@ from pathlib import Path
 from .config import home_dir
 
 TASK = "PaperBot"
+SIGNIN_DELAY = "PT1M"    # first check this long after you sign in to Windows
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 
@@ -68,14 +70,19 @@ def pythonw() -> Path:
 
 
 def install(minutes: int = 10) -> None:
-    """Turn automatic mode on (re-installing replaces any older task)."""
+    """Turn automatic mode on (re-installing replaces any older task). Checks run every
+    `minutes`, and also one minute after you sign in to Windows, so mail is picked up soon
+    after the computer starts instead of at the next 10-minute slot."""
     root = home_dir()
     script = f"""
+$user = "$env:USERDOMAIN\\$env:USERNAME"
 $action = New-ScheduledTaskAction -Execute {_q(pythonw())} -Argument '-m paperbot run' -WorkingDirectory {_q(root)}
-$trigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) -RepetitionInterval (New-TimeSpan -Minutes {int(minutes)})
+$every = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) -RepetitionInterval (New-TimeSpan -Minutes {int(minutes)})
+$signin = New-ScheduledTaskTrigger -AtLogOn -User $user
+$signin.Delay = '{SIGNIN_DELAY}'
 $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -MultipleInstances IgnoreNew -RunOnlyIfNetworkAvailable -ExecutionTimeLimit (New-TimeSpan -Hours 2)
-$principal = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\\$env:USERNAME" -LogonType Interactive
-Register-ScheduledTask -TaskName {_q(TASK)} -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Description 'PaperBot: answers paper requests by email' -Force | Out-Null
+$principal = New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive
+Register-ScheduledTask -TaskName {_q(TASK)} -Action $action -Trigger @($every, $signin) -Settings $settings -Principal $principal -Description 'PaperBot: answers paper requests by email' -Force | Out-Null
 'OK'"""
     cp = _ps(script, timeout=120)
     if "OK" not in cp.stdout:

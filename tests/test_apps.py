@@ -1,6 +1,7 @@
 """The desktop app and the colleague request page."""
 import json
 import re
+import subprocess
 import zipfile
 
 import pytest
@@ -46,6 +47,22 @@ def test_installer_zip_never_contains_private_files(tmp_path):
     assert "PaperBot/LICENSE" in names
     assert "PaperBot/paperbot/assets/paperbot.ico" in names
     assert not [n for n in names if "config.toml" in n or "/data/" in n or "__pycache__" in n]
+
+
+def test_automatic_mode_also_runs_a_minute_after_windows_sign_in(monkeypatch):
+    from paperbot import winsvc
+    scripts = []
+
+    def fake_ps(script, timeout=60):
+        scripts.append(script)
+        return subprocess.CompletedProcess([], 0, "OK\n", "")
+
+    monkeypatch.setattr(winsvc, "_ps", fake_ps)
+    winsvc.install(10)
+    (script,) = scripts
+    assert "-RepetitionInterval (New-TimeSpan -Minutes 10)" in script
+    assert "-AtLogOn -User $user" in script and "$signin.Delay = 'PT1M'" in script
+    assert "-Trigger @($every, $signin)" in script
 
 
 def test_installer_zip_gives_batch_files_windows_line_endings(tmp_path):
