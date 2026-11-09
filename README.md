@@ -127,4 +127,8 @@ Everything is also available as `paperbot <command>` (`paperbot -h`). The schedu
 .venv\Scripts\python scripts\gui_screenshots.py out [--dark]    # app screenshots on demo data
 ```
 
+## License
+
+PaperBot is free to use, change and share under the [MIT License](LICENSE).
+
 Made by Priya Raj Chanda.

@@ -39,9 +39,11 @@ def test_installer_zip_never_contains_private_files(tmp_path):
     (root / "data" / "paperbot.db").write_text("secret")
     (root / "config.toml").write_text("username = 'me'")
     (root / "pyproject.toml").write_text("")
+    (root / "LICENSE").write_text("MIT License")
     (root / "Install PaperBot.cmd").write_text("")
     names = zipfile.ZipFile(make_zip(tmp_path / "out.zip", root)).namelist()
     assert "PaperBot/Install PaperBot.cmd" in names
+    assert "PaperBot/LICENSE" in names
     assert "PaperBot/paperbot/assets/paperbot.ico" in names
     assert not [n for n in names if "config.toml" in n or "/data/" in n or "__pycache__" in n]
 

@@ -7,8 +7,8 @@ from pathlib import Path
 
 from .config import home_dir
 
-INCLUDE = ["pyproject.toml", "README.md", "config.example.toml", "Install PaperBot.cmd",
-           ".gitignore"]
+INCLUDE = ["pyproject.toml", "README.md", "LICENSE", "config.example.toml",
+           "Install PaperBot.cmd", ".gitignore"]
 INCLUDE_DIRS = ["paperbot", "scripts", "tests"]
 SKIP_PARTS = {"__pycache__", ".pytest_cache", "data", ".venv"}
 SKIP_SUFFIX = {".pyc", ".pyo"}
