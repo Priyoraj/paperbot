@@ -16,6 +16,7 @@ from .mail import (BOT_HEADER, Incoming, MailClient, build_message, is_from_bot,
 from .parse import message_text, parse_request, strip_quoted
 from .resolve import Paper, ResolveError, Resolver
 from .sources import PUBLISHED, Candidate, OpenAccess
+from .sync import LockLost, NoSync, computer_name
 from .vpn import Vpn, VpnError, vpn_session
 
 log = logging.getLogger(__name__)
@@ -65,7 +66,8 @@ def describe(row) -> str:
 
 class Bot:
     def __init__(self, cfg: Config, db: DB, mail: MailClient, resolver: Resolver,
-                 oa: OpenAccess, vpn: Vpn | None, publisher_factory, clock=datetime.now):
+                 oa: OpenAccess, vpn: Vpn | None, publisher_factory, clock=datetime.now,
+                 sync=None):
         self.cfg = cfg
         self.db = db
         self.mail = mail
@@ -74,6 +76,11 @@ class Bot:
         self.vpn = vpn
         self.publisher_factory = publisher_factory
         self.clock = clock
+        # Working together with PaperBot on other computers (sync.py). Everything that changes
+        # the records or uses the VPN runs inside `with self.sync.session():`.
+        self.sync = sync or NoSync()
+        self.host = self.sync.name or computer_name()
+        self.wait_s = 120.0     # how long the owner's own actions wait for another computer
         self.pdf_dir = cfg.data_dir / "pdfs"
         self.pdf_dir.mkdir(parents=True, exist_ok=True)
         self._oa_cache: dict[int, list[Candidate]] = {}
@@ -81,12 +88,23 @@ class Bot:
         self._outcome: dict[int, tuple[str, str]] = {}  # item -> publisher status, reason
 
     # =================================================================
-    def run_once(self) -> None:
-        self.intake()
-        self.process()
-        self.deliver()
-        self.notify_owner()
+    def run_once(self, wait_s: float = 0) -> None:
+        """One check. wait_s: how long to wait if another computer is working right now."""
+        self.sync.refresh(wait_s)             # see what another computer did meanwhile
+        incoming = self.mail.fetch(self.cfg.lookback_days, self._wanted)
+        if any(not self.db.is_seen(i.message_id) for i in incoming) or self.db.has_work():
+            with self.sync.session(wait_s):
+                self.intake(incoming)
+                self.sync.checkpoint()        # the others now know what this one took on
+                self.process()
+                self.deliver()
+                self.notify_owner()
         self.cleanup()
+
+    @property
+    def _here(self) -> str:
+        """' on OFFICE-PC' in messages to the owner, once there is more than one computer."""
+        return f" on {self.host}" if self.sync.joined else ""
 
     # ---- 1. inbox ----------------------------------------------------
     def _wanted(self, hdr) -> bool:
@@ -97,10 +115,13 @@ class Bot:
             return True
         return any(k in subject for k in self.cfg.subject_keywords)
 
-    def intake(self) -> None:
-        for inc in self.mail.fetch(self.cfg.lookback_days, self._wanted):
+    def intake(self, incoming: list[Incoming] | None = None) -> None:
+        if incoming is None:
+            incoming = self.mail.fetch(self.cfg.lookback_days, self._wanted)
+        for inc in incoming:
             if self.db.is_seen(inc.message_id):
                 continue
+            self.sync.guard()
             try:
                 if is_from_bot(inc.msg):
                     self.db.mark_seen(inc.message_id, "own")
@@ -217,24 +238,31 @@ class Bot:
     def decide(self, email: str, approve: bool, notify: bool = False) -> int:
         """Approve/deny a person and release their held requests. Returns #requests released."""
         email = email.lower()
-        self.db.set_person_status(email, "approved" if approve else "denied")
-        released = self.db.release_held(email, "queued" if approve else "denied")
-        if not approve and self.cfg.reply_to_denied:
-            for req in self.db.requests_with_status("denied", email):
-                if req["note"] != "decline sent":
-                    self._send(email, reply_subject(req["subject"]),
-                               self._greeting(req["sender_name"]) +
-                               "Sorry, I'm not able to send papers to this address." + self._sign(),
-                               in_reply_to=req["message_id"], references=req["refs"])
-                    self.db.set_request_status(req["id"], "denied", "decline sent")
-        if notify:
-            what = (f"approved - {released} waiting request(s) will be answered now"
-                    if approve else "denied - their requests will be ignored")
-            self._send(self.cfg.owner_address, f"[PaperBot] {email} {what.split(' - ')[0]}",
-                       f"{email} {what}.\n")
+        with self.sync.session(self.wait_s):
+            self.db.set_person_status(email, "approved" if approve else "denied")
+            released = self.db.release_held(email, "queued" if approve else "denied")
+            if not approve and self.cfg.reply_to_denied:
+                for req in self.db.requests_with_status("denied", email):
+                    if req["note"] != "decline sent":
+                        self._send(email, reply_subject(req["subject"]),
+                                   self._greeting(req["sender_name"]) +
+                                   "Sorry, I'm not able to send papers to this address." +
+                                   self._sign(),
+                                   in_reply_to=req["message_id"], references=req["refs"])
+                        self.db.set_request_status(req["id"], "denied", "decline sent")
+            if notify:
+                what = (f"approved - {released} waiting request(s) will be answered now"
+                        if approve else "denied - their requests will be ignored")
+                self._send(self.cfg.owner_address, f"[PaperBot] {email} {what.split(' - ')[0]}",
+                           f"{email} {what}.\n")
         log.info("%s %s (%d held requests released)", email,
                  "approved" if approve else "denied", released)
         return released
+
+    def forget(self, email: str) -> None:
+        """Forget a requester: their next request is treated as first-time."""
+        with self.sync.session(self.wait_s):
+            self.db.forget_person(email)
 
     # ---- 2. find and fetch -------------------------------------------
     def process(self) -> None:
@@ -249,7 +277,9 @@ class Bot:
             if r["status"] != "resolved":
                 continue
             waited = now - datetime.fromisoformat(self._req_created(r)) >= WAIT_FOR_VPN
-            no_vpn_route = not (r["doi"] or r["landing_url"]) or not self.cfg.vpn_enabled
+            # No VPN here, but another computer sharing these records has it: leave it to that one.
+            vpn_somewhere = self.cfg.vpn_enabled or self.db.vpn_elsewhere(self.sync.node)
+            no_vpn_route = not (r["doi"] or r["landing_url"]) or not vpn_somewhere
             if r["id"] in attempted or waited or no_vpn_route:
                 if not self._try_open_access(r, published_only=False):
                     self._give_up(r)
@@ -339,7 +369,7 @@ class Bot:
         path = self.pdf_dir / f"{hashlib.sha1(key.lower().encode()).hexdigest()[:16]}.pdf"
         path.write_bytes(data)
         self.db.update_item(row["id"], status="fetched", pdf_path=str(path), source=source,
-                            version=version, fetched_at=now_iso(), reason=None)
+                            version=version, fetched_at=now_iso(), reason=None, host=self.host)
         log.info("item %d fetched from %s (%s, %d KB)", row["id"], source, version,
                  len(data) // 1024)
 
@@ -348,7 +378,8 @@ class Bot:
         if not hit or hit["id"] == row["id"]:
             return False
         self.db.update_item(row["id"], status="fetched", pdf_path=hit["pdf_path"],
-                            source="cache", version=hit["version"], fetched_at=now_iso())
+                            source="cache", version=hit["version"], fetched_at=now_iso(),
+                            host=self.host)
         return True
 
     def _try_open_access(self, row, published_only: bool) -> bool:
@@ -382,10 +413,12 @@ class Bot:
             log.info("%d paper(s) wait for the VPN window %s", len(rows), cfg.vpn_allowed_hours)
             return set()
         attempted: set[int] = set()
+        self.sync.guard(renew=True)   # a fresh turn: the mail server may be out of reach on the VPN
         try:
             with vpn_session(self.vpn, cfg.vpn_disconnect_when_done):
                 with self.publisher_factory() as pub:
                     for r in rows:
+                        self.sync.guard()
                         res = pub.fetch(paper_from_row(r))
                         attempted.add(r["id"])
                         if res.status == "ok" and res.data:
@@ -395,17 +428,20 @@ class Bot:
                             self._outcome[r["id"]] = (res.status, res.reason)
                             log.info("item %d: publisher %s (%s)", r["id"], res.status,
                                      res.reason)
+        except LockLost:
+            raise
         except VpnError as exc:
             log.error("%s", exc)
-            if self.db.alert_due("vpn", timedelta(hours=6)):
+            if self.db.alert_due(f"vpn {self.host}", timedelta(hours=6)):   # per computer
                 self._send(cfg.owner_address, "[PaperBot] VPN problem",
-                           f"PaperBot couldn't connect '{cfg.vpn_name}':\n  {exc}\n\n"
+                           f"PaperBot{self._here} couldn't connect '{cfg.vpn_name}':\n  {exc}\n\n"
                            "Papers that need the VPN will wait and be retried every run.\n")
         except Exception as exc:  # noqa: BLE001 - e.g. the browser failed to start
             log.exception("publisher phase failed")
-            if self.db.alert_due("browser", timedelta(hours=6)):
+            if self.db.alert_due(f"browser {self.host}", timedelta(hours=6)):
                 self._send(cfg.owner_address, "[PaperBot] Browser problem",
-                           f"PaperBot couldn't use the browser ({cfg.browser}):\n  {exc}\n")
+                           f"PaperBot{self._here} couldn't use the browser ({cfg.browser}):\n"
+                           f"  {exc}\n")
         return attempted
 
     def _give_up(self, row) -> None:
@@ -430,6 +466,7 @@ class Bot:
     # ---- 3. replies --------------------------------------------------
     def deliver(self) -> None:
         for req in self.db.requests_with_status("queued"):
+            self.sync.guard()
             try:
                 self._deliver_request(req)
             except Exception:  # noqa: BLE001 - try again next run
@@ -508,6 +545,7 @@ class Bot:
         manual, big = self.db.needs_owner()
         if not manual and not big:
             return
+        self.sync.guard()
         parts = []
         if manual:
             lines = [f"  #{r['id']}  {describe(r)}  (for {r['sender']})\n        "
@@ -525,6 +563,7 @@ class Bot:
                 "To give up on one:  paperbot giveup <id>   (the requester is told)")
         if big:
             lines = [f"  #{r['id']}  {describe(r)}  (for {r['sender']})\n        {r['pdf_path']}"
+                     + (f"  (on {r['host']})" if r["host"] and self.sync.joined else "")
                      for r in big]
             parts.append("Too large to email - please share these yourself (e.g. Google Drive):"
                          "\n\n" + "\n".join(lines))
@@ -535,55 +574,84 @@ class Bot:
             self.db.update_item(r["id"], owner_notified=1)
 
     # ---- 5. manual help for CAPTCHA'd papers --------------------------
+    def _pin(self, item_ids: list[int] | None) -> dict[int, tuple | None]:
+        """Remember which papers the owner picked by more than their number: taking in another
+        computer's records (when this one first joins) can renumber papers."""
+        return {i: self._paper_key(i) for i in item_ids or []}
+
+    def _paper_key(self, item_id: int) -> tuple | None:
+        row = self.db.item(item_id)
+        return row and (self.db.request(row["request_id"])["message_id"], row["raw"])
+
+    def _still(self, pinned: dict[int, tuple | None]) -> set[int]:
+        return {i for i, key in pinned.items() if key and self._paper_key(i) == key}
+
     def run_manual(self, manual_factory, say=print, item_ids: list[int] | None = None) -> int:
-        rows = [r for r in self.db.items_with_status("manual") if r["pdf_path"] is None
-                and (item_ids is None or r["id"] in item_ids)]
-        if not rows:
-            say("Nothing is waiting for you.")
-            return 0
-        got = 0
-        with ExitStack() as stack:
-            if self.cfg.vpn_enabled and self.vpn is not None:
-                stack.enter_context(vpn_session(self.vpn, self.cfg.vpn_disconnect_when_done))
-            session = stack.enter_context(manual_factory())
-            for n, r in enumerate(rows, 1):
-                if getattr(getattr(session, "control", None), "stop", None) and \
-                        session.control.stop.is_set():
-                    break
-                say(f"[{n}/{len(rows)}] {describe(r)} (for {r['sender']}): a browser window "
-                    "is open. Solve the check there if one appears, then download the PDF - "
-                    "PaperBot picks it up.")
-                data = session.capture(paper_from_row(r), r["landing_url"])
-                if data:
-                    self._save(r, data, "manual", PUBLISHED)
-                    self.db.log_download("manual", r["sender"])
-                    got += 1
-                    self.deliver()          # send it now, not after the whole batch
-                    say(f"[{n}/{len(rows)}] Got it - sent to {r['sender']}.")
-                else:
-                    say(f"[{n}/{len(rows)}] Skipped.")
-        self.deliver()
-        return got
+        pinned = self._pin(item_ids)
+        with self.sync.session(self.wait_s):
+            picked = None if item_ids is None else self._still(pinned)
+            rows = [r for r in self.db.items_with_status("manual") if r["pdf_path"] is None
+                    and (picked is None or r["id"] in picked)]
+            if not rows:
+                say("Nothing is waiting for you.")
+                return 0
+            got = 0
+            with ExitStack() as stack:
+                if self.cfg.vpn_enabled and self.vpn is not None:
+                    self.sync.guard(renew=True)
+                    stack.enter_context(vpn_session(self.vpn, self.cfg.vpn_disconnect_when_done))
+                session = stack.enter_context(manual_factory())
+                for n, r in enumerate(rows, 1):
+                    if getattr(getattr(session, "control", None), "stop", None) and \
+                            session.control.stop.is_set():
+                        break
+                    self.sync.guard()
+                    say(f"[{n}/{len(rows)}] {describe(r)} (for {r['sender']}): a browser window "
+                        "is open. Solve the check there if one appears, then download the PDF - "
+                        "PaperBot picks it up.")
+                    data = session.capture(paper_from_row(r), r["landing_url"])
+                    if data:
+                        self._save(r, data, "manual", PUBLISHED)
+                        self.db.log_download("manual", r["sender"])
+                        got += 1
+                        self.deliver()          # send it now, not after the whole batch
+                        say(f"[{n}/{len(rows)}] Got it - sent to {r['sender']}.")
+                    else:
+                        say(f"[{n}/{len(rows)}] Skipped.")
+            self.deliver()
+            return got
 
     def attach(self, item_id: int, data: bytes) -> None:
         """The owner downloaded a waiting paper by hand: send it on."""
-        row = self.db.item(item_id)
-        if row is None or row["status"] != "manual":
-            raise ValueError(f"#{item_id} isn't waiting for you (see `paperbot status`)")
-        self._save(row, data, "manual", PUBLISHED)
-        self.db.log_download("attach", self.db.request(row["request_id"])["sender"])
-        self.deliver()
+        pinned = self._pin([item_id])
+        with self.sync.session(self.wait_s):
+            row = self.db.item(item_id)
+            if row is None or row["status"] != "manual" or item_id not in self._still(pinned):
+                raise ValueError(f"#{item_id} isn't waiting for you (see `paperbot status`)")
+            self._save(row, data, "manual", PUBLISHED)
+            self.db.log_download("attach", self.db.request(row["request_id"])["sender"])
+            self.deliver()
 
     def give_up(self, item_ids: list[int] | None) -> int:
-        rows = self.db.items_with_status("manual")
-        n = 0
-        for r in rows:
-            if item_ids is None or r["id"] in item_ids:
-                self.db.update_item(r["id"], status="failed", reported=0,
-                                    reason="sorry, I couldn't get this one")
-                n += 1
-        self.deliver()
-        return n
+        pinned = self._pin(item_ids)
+        with self.sync.session(self.wait_s):
+            picked = None if item_ids is None else self._still(pinned)
+            n = 0
+            for r in self.db.items_with_status("manual"):
+                if picked is None or r["id"] in picked:
+                    self.db.update_item(r["id"], status="failed", reported=0,
+                                        reason="sorry, I couldn't get this one")
+                    n += 1
+            self.deliver()
+            return n
+
+    def mark_shared(self, item_ids: list[int]) -> None:
+        """The owner passed on files that were too large to email: off the Needs-you list."""
+        pinned = self._pin(item_ids)
+        with self.sync.session(self.wait_s):
+            for i in self._still(pinned):
+                if self.db.item(i)["status"] == "failed":
+                    self.db.update_item(i, owner_notified=2)
 
     # ---- misc ----------------------------------------------------------
     def cleanup(self) -> None:
