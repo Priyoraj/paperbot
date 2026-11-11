@@ -10,8 +10,8 @@ from tkinter import messagebox, ttk
 from .. import config as config_mod
 from .. import winsvc
 from ..config import RECOMMENDED_LIMITS
-from ..app import (has_mail_password, make_vpn, set_secret, setup_checks, vpn_credentials,
-                   vpn_profiles)
+from ..app import (check_sharing, has_mail_password, make_vpn, set_secret, setup_checks,
+                   start_sharing, stop_sharing, vpn_credentials, vpn_profiles)
 from .base import STRONG, SUBTITLE, ScrollFrame, f
 
 # (section, key, label, kind, help); kind: str | int | float | bool | kw | choice:a,b | vpnname
@@ -47,6 +47,7 @@ SECTIONS = [
         ("schedule", "poll_minutes", "Automatic mode checks mail every (minutes)", "int", ""),
         ("fetch", "keep_pdfs_days", "Keep downloaded PDFs for (days)", "int", ""),
     ]),
+    ("More than one computer", [("@together",)]),
     ("Advanced mail settings", [
         ("mail", "imap_host", "IMAP server", "str", ""),
         ("mail", "imap_port", "IMAP port", "int", ""),
@@ -99,7 +100,7 @@ class SettingsTab:
         self.saved_label = ttk.Label(top, text="", foreground=pal["muted"])
         self.saved_label.pack(side="left", padx=px(14))
 
-        scroll = ScrollFrame(self.frame)
+        self.scroll = scroll = ScrollFrame(self.frame)
         scroll.pack(fill="both", expand=True)
         body = scroll.body
         self.vars: dict[tuple[str, str], tuple[str, tk.Variable]] = {}
@@ -118,6 +119,9 @@ class SettingsTab:
                     continue
                 if spec[0] == "@vpnpw":
                     row = self._password_row(body, row, mail=False)
+                    continue
+                if spec[0] == "@together":
+                    row = self._together_block(body, row)
                     continue
                 section, key, label, kind, hint = spec
                 row = self._field(body, row, section, key, label, kind, hint)
@@ -254,6 +258,38 @@ class SettingsTab:
             warn = ""
         self.limit_warning.configure(text=warn)
 
+    def _together_block(self, body, row) -> int:
+        """PaperBot on a second computer for the same mailbox: status and three buttons."""
+        px, pal = self.app.px, self.app.pal
+        ttk.Label(body, foreground=pal["muted"], wraplength=px(1000), justify="left", text=(
+            "Do you run PaperBot on a second computer for the same mailbox, say an office PC "
+            "and a laptop? They can work together: every request is answered once, by "
+            "whichever computer is on; people, requests and the daily limits are the same on "
+            "both; and only one of them uses the institute VPN at a time. They do it through "
+            f"your mailbox, where PaperBot keeps its records in a folder called "
+            f"{self.app.cfg.sync_folder} (in Gmail: a label). Press Start on one computer and "
+            "the other one joins by itself. Until then, keep automatic mode on in one "
+            "computer only. The settings on this page are not shared: set the limits and "
+            "approval the same on both.")).grid(row=row, column=0, columnspan=3, sticky="w",
+                                                padx=px(18), pady=(px(2), px(8)))
+        row += 1
+        self.together_status = ttk.Label(body, text="", font=f(STRONG), wraplength=px(1000),
+                                         justify="left")
+        self.together_status.grid(row=row, column=0, columnspan=3, sticky="w", padx=px(18))
+        row += 1
+        line = ttk.Frame(body)
+        line.grid(row=row, column=0, columnspan=3, sticky="w", padx=px(18), pady=(px(10), 0))
+        self.b_together_start = ttk.Button(line, text="Start", style="Accent.TButton",
+                                           command=self.start_together)
+        self.b_together_start.pack(side="left")
+        self.b_together_stop = ttk.Button(line, text="Stop on this computer",
+                                          command=self.stop_together)
+        self.b_together_stop.pack(side="left", padx=px(8))
+        ttk.Button(line, text="Check the mailbox", command=self.check_together).pack(side="left")
+        ttk.Label(line, text="saves, reads and deletes one test message; changes nothing else",
+                  foreground=pal["muted"]).pack(side="left", padx=px(12))
+        return row + 1
+
     def _password_row(self, body, row, mail: bool) -> int:
         px, pal = self.app.px, self.app.pal
         ttk.Label(body, text="Mail password" if mail else "VPN sign-in").grid(
@@ -303,6 +339,63 @@ class SettingsTab:
             foreground=pal["muted"] if saved is None else (pal["ok"] if saved else pal["bad"]))
         if saved and vpn_credentials(cfg) is None:
             self.vpn_btn.pack_forget()
+
+        here = app.together
+        if here is not None:
+            text, color = here.summary, ""
+            if app.sync_problem:
+                text, color = "Stopped: " + app.sync_problem, pal["bad"]
+            elif here.joined and here.synced_at:
+                day = "" if here.synced_at.date() == dt.date.today() else \
+                    here.synced_at.strftime("%b %d ")
+                text += f" Records last exchanged with the mailbox {day}{here.synced_at:%H:%M}."
+            self.together_status.configure(text=text, foreground=color)
+            self.b_together_start.state(["disabled" if here.joined else "!disabled"])
+            self.b_together_stop.state(["!disabled" if here.joined else "disabled"])
+
+    # ---- more than one computer -------------------------------------------------------
+    def start_together(self) -> None:
+        app = self.app
+        if not messagebox.askyesno(
+                "PaperBot", "Start working together from this computer?\n\nPaperBot first tries "
+                "out your mailbox, then saves its records (people, requests, download counts) "
+                f"in the mailbox folder {app.cfg.sync_folder}. Nothing is sent to anyone.\n\n"
+                "PaperBot on your other computer then joins by itself the next time it checks "
+                f"the mail or you open it there. It needs version {config_mod.VERSION} or "
+                "newer.", parent=app.root):
+            return
+        app.started_here = True
+
+        def failed(exc):                  # Start may have got as far as the settings file
+            app.started_here = False
+            app.reload_config()
+
+        app.run_task("Trying out your mailbox and saving PaperBot's records there…",
+                     lambda: start_sharing(app.cfg), lock=True, failed=failed,
+                     done=lambda msg: (app.reload_config(),
+                                       messagebox.showinfo("PaperBot", msg, parent=app.root)))
+
+    def stop_together(self) -> None:
+        app = self.app
+        others = " and ".join(app.together.others) if app.together else ""
+        if not messagebox.askyesno(
+                "PaperBot", "Stop working together on this computer?\n\nIt goes back to keeping "
+                "its own records." + (f" PaperBot on {others} carries on, but the computers no "
+                                      "longer know what the other one does." if others else "")
+                + "\n\nAfter this, keep automatic mode on in one computer only - otherwise "
+                "colleagues get every paper twice.", icon="warning", default="no",
+                parent=app.root):
+            return
+        app.run_task("Telling your other computer and stopping…",
+                     lambda: stop_sharing(app.cfg), lock=True,
+                     failed=lambda exc: app.reload_config(),
+                     done=lambda msg: (app.reload_config(),
+                                       messagebox.showinfo("PaperBot", msg, parent=app.root)))
+
+    def check_together(self) -> None:
+        app = self.app
+        app.run_task("Trying out your mailbox…", lambda: check_sharing(app.cfg),
+                     done=lambda msg: messagebox.showinfo("PaperBot", msg, parent=app.root))
 
     def save(self) -> None:
         cfg = self.app.cfg

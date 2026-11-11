@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "paperbot"
-version = "0.1.0"
+version = "0.2.0"
 description = "Answers colleagues' paper requests by email: finds the PDF (open access first, then via institute VPN) and mails it back."
 license = "MIT"
 requires-python = ">=3.10"

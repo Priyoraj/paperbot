@@ -99,9 +99,14 @@ class DB:
             self.conn.execute("ALTER TABLE items ADD COLUMN host TEXT")
         if "uid" not in self._columns("downloads"):
             self.conn.execute("ALTER TABLE downloads ADD COLUMN uid TEXT")
-        for (rowid,) in self.conn.execute("SELECT id FROM downloads WHERE uid IS NULL").fetchall():
+        # Downloads from before 0.2 get a tag that comes out the same on every computer: a
+        # database that began as a copy of another one (a second computer set up from the
+        # first) must not count the same download twice when the two are put together.
+        for row in self.conn.execute(
+                "SELECT id, at, source, requester FROM downloads WHERE uid IS NULL").fetchall():
+            basis = "|".join(str(row[k]) for k in ("id", "at", "source", "requester"))
             self.conn.execute("UPDATE downloads SET uid=? WHERE id=?",
-                              (secrets.token_hex(8), rowid))
+                              (hashlib.sha256(basis.encode()).hexdigest()[:16], row["id"]))
         self.conn.commit()
 
     def _columns(self, table: str) -> list[str]:

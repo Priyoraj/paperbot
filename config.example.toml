@@ -61,3 +61,14 @@ keep_pdfs_days = 30
 
 [schedule]
 poll_minutes = 10         # used by `paperbot watch` and the scheduled task installer
+
+[sync]
+# PaperBot on more than one computer, all answering the same mailbox: the computers keep one
+# set of records in a folder of that mailbox and take turns, so every request is answered once
+# and the daily limits count for all of them together.
+# Nothing is stored there until you press Start on one computer (Settings > More than one
+# computer, or `paperbot sync on`); the others then join by themselves.
+# false = this computer ignores the shared records and works on its own. Then keep automatic
+# mode on in one computer only.
+enabled = true
+folder = "PaperBot-sync"  # the mailbox folder (a Gmail label) that holds the shared records

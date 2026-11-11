@@ -48,6 +48,7 @@ SAFETY_S = 2 * 60    # a computer stops relying on its lock this long before it 
 SETTLE_S = 3         # pause between saying "I'd like to work" and reading who came first
 POLL_S = 8           # how often to look again while another computer is working
 KEEP_STATES = 2      # the newest records message plus one spare
+SLOW_S = 20          # a mail command that hangs this long before failing gets a log line
 
 
 class Busy(RuntimeError):
@@ -121,6 +122,11 @@ def computer_name() -> str:
     """What Windows calls this computer."""
     import platform
     return platform.node() or "this computer"
+
+
+def tidy_name(name: str) -> str:
+    """A computer's name as it is written into the shared records and mail headers."""
+    return re.sub(r"[^A-Za-z0-9._-]", "_", name or "computer")[:40]
 
 
 # ---- the lock ------------------------------------------------------------------------------
@@ -403,6 +409,15 @@ def merge_states(base: dict, other: dict) -> dict:
 
 
 # ---- putting it together -----------------------------------------------------------------
+def detach(db: DB) -> None:
+    """This computer's records are its own again: forget the other computers and what was
+    last exchanged with the mailbox. (Local only; Sync.leave() tells the mailbox first.)"""
+    for c in db.computers():                          # no one to wait for any more
+        db.forget_computer(c["node"])
+    db.set_meta(joined=None, synced_remote=None, synced_local=None, version=None,
+                session=None, synced_at=None)
+
+
 class NoSync:
     """PaperBot on its own: nothing is shared."""
     name = node = ""
@@ -430,7 +445,7 @@ class Sync:
                  clock=time, heartbeat: bool = True, backup_path: Path | None = None,
                  lease: dict | None = None):
         self.db, self.store, self.clock = db, store, clock
-        self.name = re.sub(r"[^A-Za-z0-9._-]", "_", name or "computer")[:40]
+        self.name = tidy_name(name)
         tag = db.meta("node")
         if not tag:
             tag = secrets.token_hex(3)
@@ -577,10 +592,7 @@ class Sync:
                 log.warning("couldn't tell the mailbox that this computer left: %s", exc)
             finally:
                 self._leaving = False
-        for c in self.db.computers():                 # on its own again: no one to wait for
-            self.db.forget_computer(c["node"])
-        self.db.set_meta(joined=None, synced_remote=None, synced_local=None, version=None,
-                         session=None, synced_at=None)
+        detach(self.db)
 
     def selftest(self) -> str:
         """Save, list, read back and delete a test message in the shared folder."""
@@ -591,12 +603,19 @@ class Sync:
             mine = [e for e in entries if e.ident == ident]
             if not mine:
                 raise SyncError("the mailbox didn't list the test message PaperBot just saved")
-            if self.store.payload(mine[0].uid) != token:
-                raise SyncError("the test message came back changed")
-            drift = mine[0].when - self.clock.time()
-            self.store.remove([e.uid for e in mine])
+            try:
+                if self.store.payload(mine[0].uid) != token:
+                    raise SyncError("the test message came back changed")
+            finally:
+                self.store.remove([e.uid for e in mine])
             if any(e.ident == ident for e in self.store.entries() or []):
                 raise SyncError("the mailbox didn't delete the test message")
+            # The real folder dates its test message 2001 (PROBE_DATE). Taking turns relies on
+            # the server stamping each arrival with its own clock, not copying that date.
+            if mine[0].when < PROBE_WHEN + 366 * 86400:
+                raise SyncError("this mail server doesn't put its own clock's time on new "
+                                "messages, which PaperBot needs for taking turns safely")
+            drift = mine[0].when - self.clock.time()
         finally:
             self.store.close()
         note = "" if abs(drift) < 90 else \
@@ -718,6 +737,10 @@ NOTE = ("PaperBot keeps this message in your mailbox so that the computers you r
         "itself.\n")
 DATE_RE = re.compile(r'INTERNALDATE "\s?(\d{1,2})-(\w{3})-(\d{4}) (\d\d):(\d\d):(\d\d) '
                      r'([+-])(\d\d)(\d\d)"')
+# The test message carries this date on purpose: if the server reports it back as the arrival
+# time, it isn't keeping time itself and the lock can't be trusted (see Sync.selftest).
+PROBE_WHEN = 978307200.0
+PROBE_DATE = formatdate(PROBE_WHEN, usegmt=True)       # Mon, 01 Jan 2001 00:00:00 GMT
 
 
 def build_entry(address: str, kind: str, ident: str, session: str = "", node: str = "",
@@ -725,7 +748,7 @@ def build_entry(address: str, kind: str, ident: str, session: str = "", node: st
     msg = EmailMessage()
     msg["From"] = msg["To"] = address
     msg["Subject"] = SUBJECTS.get(kind, "PaperBot").format(name=node_name(node))
-    msg["Date"] = formatdate(usegmt=True)
+    msg["Date"] = PROBE_DATE if kind == "probe" else formatdate(usegmt=True)
     msg["Message-ID"] = make_msgid(domain="paperbot.invalid")
     msg[BOT_HEADER] = APP_NAME            # the inbox reader skips anything carrying this
     msg[SYNC_HEADER] = kind
@@ -811,6 +834,7 @@ class ImapStore:
     # -- plumbing ---------------------------------------------------------------------------
     def _do(self, op):
         for attempt in (1, 2):
+            started = time.monotonic()
             try:
                 if self._imap is None:
                     self._imap = self.connect()
@@ -818,10 +842,16 @@ class ImapStore:
                     self._caps = set((data[0] or b"").decode("ascii", "replace").upper().split())
                     self._selected = False
                 return op(self._imap)
-            except (imaplib.IMAP4.abort, OSError, EOFError):
+            except (imaplib.IMAP4.abort, OSError, EOFError) as exc:
                 self.close()               # the connection dropped: once more on a fresh one
                 if attempt == 2:
                     raise
+                waited = time.monotonic() - started
+                # A quick drop is routine (e.g. the VPN came up). A long silence is worth a
+                # line in the activity log: it explains a check that took minutes.
+                log.log(logging.INFO if waited >= SLOW_S else logging.DEBUG,
+                        "the mail server didn't answer for %d s (%s); trying again on a new "
+                        "connection", waited, type(exc).__name__)
 
     def _select(self, imap) -> bool:
         """Open the folder afresh (so the listing is current). False: it doesn't exist."""
@@ -888,6 +918,10 @@ class ImapStore:
             trash = self._trash_folder(imap)
             if trash and self._bin(imap, ids, trash):
                 return
+            if "X-GM-EXT-1" in self._caps:
+                _warn_once("couldn't move PaperBot's own housekeeping messages to Gmail's Bin, "
+                           "so they stay in All Mail (harmless). To fix: Gmail settings > "
+                           "Labels > Bin > Show in IMAP")
             imap.uid("STORE", ids, "+FLAGS.SILENT", "(\\Deleted)")
             if "UIDPLUS" in self._caps:
                 imap.uid("EXPUNGE", ids)
@@ -933,7 +967,7 @@ class ImapStore:
                 if typ == "OK":
                     binned = where[2].decode("ascii")
                     imap.uid("STORE", binned, "+FLAGS.SILENT", "(\\Deleted)")
-                    imap.uid("EXPUNGE", binned)
+                    imap.uid("EXPUNGE", binned)    # these and nothing else in the Bin
             return True
         except imaplib.IMAP4.abort:
             raise
@@ -946,3 +980,13 @@ class ImapStore:
 def _text(data) -> str:
     return " ".join(d.decode("utf-8", "replace") if isinstance(d, bytes) else str(d)
                     for d in data or [] if d)
+
+
+_warned: set[str] = set()
+
+
+def _warn_once(message: str) -> None:
+    """Once per run of the program: these would otherwise repeat with every message removed."""
+    if message not in _warned:
+        _warned.add(message)
+        log.warning("%s", message)

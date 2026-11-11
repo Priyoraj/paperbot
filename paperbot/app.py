@@ -1,5 +1,6 @@
 """Shared runtime for the command line and the desktop app: secrets, locking, logging,
-building the bot, setup checks and one-off test fetches."""
+building the bot, working together with other computers, setup checks and one-off test
+fetches."""
 from __future__ import annotations
 
 import logging
@@ -7,11 +8,15 @@ import logging.handlers
 import os
 import subprocess
 import sys
-import time
 from contextlib import contextmanager
+from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 
+from . import config as config_mod
 from .config import Config, ConfigError
+# One "busy" for both cases: another PaperBot run on this computer, or PaperBot on another one.
+from .sync import Busy, LockLost, SyncError, file_lock  # noqa: F401 - used by the cli and app
 
 KEYRING_SERVICE = "PaperBot"
 log = logging.getLogger("paperbot")
@@ -80,37 +85,15 @@ def setup_logging(cfg: Config | None, verbose: bool = False, console: bool = Tru
     logging.getLogger("urllib3").setLevel(logging.WARNING)
 
 
-class Busy(RuntimeError):
-    """Another PaperBot run (e.g. the automatic background check) is working right now."""
-
-
 @contextmanager
 def single_instance(cfg: Config, wait_s: float = 0):
-    """Only one PaperBot run at a time: the background check, the app and the command line
-    must not answer the same request twice."""
-    path = cfg.data_dir / "paperbot.lock"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fh = open(path, "a+")
-    try:
-        deadline = time.monotonic() + wait_s
-        while True:
-            try:
-                if sys.platform == "win32":
-                    import msvcrt
-                    fh.seek(0)
-                    msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)
-                else:
-                    import fcntl
-                    fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                break
-            except OSError:
-                if time.monotonic() >= deadline:
-                    raise Busy("PaperBot is already busy (probably the automatic mail check) - "
-                               "try again in a minute")
-                time.sleep(1)
+    """Only one PaperBot run at a time on this computer: the background check, the app and the
+    command line must not answer the same request twice. (Between computers, the mailbox does
+    this job: see sync.py.)"""
+    with file_lock(cfg.data_dir / "paperbot.lock", wait_s,
+                   busy="PaperBot is already busy (probably the automatic mail check) - "
+                        "try again in a minute"):
         yield
-    finally:
-        fh.close()
 
 
 # ---- building the bot -------------------------------------------------------------
@@ -124,11 +107,128 @@ def build_bot(cfg: Config, need_mail: bool = True):
 
     max_pdf = int(cfg.max_pdf_mb * 1024 * 1024)
     session = make_session(cfg.contact_email)
-    mail = ImapSmtpMail(cfg, mail_password(cfg) if need_mail else "")
-    return Bot(cfg, DB(cfg.data_dir / "paperbot.db"), mail, Resolver(session),
+    password = mail_password(cfg) if need_mail else ""
+    db = DB(cfg.data_dir / "paperbot.db")
+    return Bot(cfg, db, ImapSmtpMail(cfg, password), Resolver(session),
                OpenAccess(session, cfg.contact_email, max_pdf), make_vpn(cfg),
                lambda: PublisherFetcher(cfg.browser, cfg.headless, max_pdf,
-                                        cfg.download_spacing_s))
+                                        cfg.download_spacing_s),
+               sync=make_sync(cfg, db, password))
+
+
+# ---- working together with PaperBot on other computers (sync.py) -------------------
+def make_sync(cfg: Config, db, password: str | None = None, even_if_off: bool = False):
+    """This computer's part in working together with other computers that answer the same
+    mailbox - or a stand-in that shares nothing, while that is switched off on this computer
+    ([sync] enabled = false) or there is no mailbox to share through yet."""
+    from .mail import ImapSmtpMail
+    from .sync import ImapStore, NoSync, Sync, computer_name
+    if not cfg.mail_username or not (cfg.sync_enabled or even_if_off):
+        return NoSync()
+    password = password or get_secret(f"mail:{cfg.mail_username}")
+    if not password:
+        return NoSync()
+    store = ImapStore(ImapSmtpMail(cfg, password).connect, cfg.sync_folder, cfg.mail_username)
+    return Sync(db, store, computer_name(), cfg.data_dir / "sync.lock", vpn=cfg.vpn_enabled,
+                backup_path=cfg.data_dir / "paperbot.before-sharing.db")
+
+
+@dataclass
+class Together:
+    """Where this computer stands, read from its own records (no network needed)."""
+    allowed: bool                     # [sync] enabled: this computer may share its records
+    joined: bool                      # it uses the records kept in the mailbox
+    others: list[str] = field(default_factory=list)   # the other computers' names
+    synced_at: datetime | None = None                  # last exchange with the mailbox
+
+    @property
+    def summary(self) -> str:
+        if not self.allowed:
+            return ("Off on this computer: it keeps its own records. Keep automatic mode on "
+                    "in one computer only.")
+        if not self.joined:
+            return "Not in use: PaperBot on this computer works on its own."
+        if not self.others:
+            return ("On. No other computer has joined yet: PaperBot on your other computer "
+                    "joins by itself the next time it checks the mail.")
+        return "On: working together with PaperBot on " + " and ".join(self.others) + "."
+
+
+def together(cfg: Config, db) -> Together:
+    tag = db.meta("node")
+    joined = cfg.sync_enabled and db.meta("joined") == "1"
+    others = [c["name"] for c in db.computers()
+              if not (tag and c["node"].endswith("-" + tag))] if joined else []
+    try:
+        at = datetime.fromisoformat(db.meta("synced_at") or "") if joined else None
+    except ValueError:
+        at = None
+    return Together(cfg.sync_enabled, joined, others, at)
+
+
+def _open_sync(cfg: Config, db):
+    from .sync import NoSync
+    sync = make_sync(cfg, db, mail_password(cfg), even_if_off=True)
+    if isinstance(sync, NoSync):
+        raise ConfigError("fill in the mailbox address first (Settings)")
+    return sync
+
+
+def check_sharing(cfg: Config) -> str:
+    """Try out, on the real mailbox, everything working together needs from it. Leaves
+    nothing behind but the (empty) folder."""
+    from .db import DB
+    cfg.check_ready()
+    db = DB(cfg.data_dir / "paperbot.db")
+    try:
+        return "Your mailbox passed: " + _open_sync(cfg, db).selftest() + "."
+    finally:
+        db.close()
+
+
+def start_sharing(cfg: Config, wait_s: float = 60) -> str:
+    """Start working together from this computer - or join, if PaperBot on another computer
+    already started. Call it with the local lock held (single_instance)."""
+    from .db import DB
+    cfg.check_ready()
+    if not cfg.sync_enabled:
+        config_mod.set_value("sync", "enabled", True, cfg.path)
+        cfg = config_mod.load(cfg.path)
+    db = DB(cfg.data_dir / "paperbot.db")
+    try:
+        sync = _open_sync(cfg, db)
+        sync.start(wait_s)
+        others = sync.others()
+    finally:
+        db.close()
+    if others:
+        return ("This computer now works together with PaperBot on " + " and ".join(others)
+                + ". Both answer your mailbox as one.")
+    return ("Started. Now open PaperBot on your other computer (it needs version "
+            f"{config_mod.VERSION} or newer): it joins by itself, and from then on the two "
+            "answer your mailbox as one.")
+
+
+def stop_sharing(cfg: Config) -> str:
+    """This computer goes back to keeping its own records. Call it with the local lock held."""
+    from .db import DB
+    from .sync import NoSync, detach
+    db = DB(cfg.data_dir / "paperbot.db")
+    try:
+        was = together(cfg, db)
+        sync = make_sync(cfg, db, even_if_off=True)
+        if isinstance(sync, NoSync):          # no mailbox to tell: tidy up here only
+            detach(db)
+        else:
+            sync.leave()
+    finally:
+        db.close()
+    if cfg.sync_enabled:
+        config_mod.set_value("sync", "enabled", False, cfg.path)
+    return ("This computer keeps its own records again."
+            + (" PaperBot on " + " and ".join(was.others) + " no longer knows what this one "
+               "does, so keep automatic mode on in one computer only - otherwise colleagues "
+               "get every paper twice." if was.others else ""))
 
 
 def manual_session_factory(cfg: Config, control=None, say=lambda msg: None):
@@ -196,6 +296,38 @@ def setup_checks(cfg: Config) -> list[tuple[str, bool, str]]:
         return cfg.contact_email
 
     check("Open-access contact email", contact)
+
+    def more_computers():
+        """Looks only; never writes to the mailbox."""
+        from .db import DB
+        from .sync import NoSync
+        db = DB(cfg.data_dir / "paperbot.db")
+        try:
+            here = together(cfg, db)
+            if not here.allowed:
+                return "switched off on this computer (it keeps its own records)"
+            sync = make_sync(cfg, db)
+            if isinstance(sync, NoSync):
+                raise ConfigError("needs the mailbox address and mail password first")
+            try:
+                entries = sync.store.entries()
+            finally:
+                sync.store.close()
+            in_mailbox = any(e.kind == "state" for e in entries or [])
+            if here.joined and not in_mailbox:
+                return ("on; the shared records are missing from the mailbox and will be put "
+                        "back at the next check")
+            if here.joined:
+                return ("working together with " + " and ".join(here.others) if here.others
+                        else "on; no other computer has joined yet")
+            if in_mailbox:
+                return "PaperBot on another computer shares its records; this one joins at " \
+                       "its next check"
+            return "not in use"
+        finally:
+            db.close()
+
+    check("More than one computer", more_computers)
     return results
 
 
@@ -233,18 +365,27 @@ def fetch_one(cfg: Config, what: str, mode: str = "free", out_dir: Path | None =
         say("No free copy found.")
         if mode == "free":
             return None
-    say("Connecting the VPN and trying the publisher...")
-    with vpn_session(make_vpn(cfg), cfg.vpn_disconnect_when_done):
-        with PublisherFetcher(cfg.browser, cfg.headless, max_pdf, 0) as pub:
-            res = pub.fetch(paper)
-    if res.data:
-        from .db import DB
-        db = DB(cfg.data_dir / "paperbot.db")
-        db.log_download("try", cfg.owner_address)  # counts toward today's safe ceiling
-        path = out / "publisher.pdf"
-        path.write_bytes(res.data)
-        say(f"Saved {len(res.data) // 1024} KB from the publisher -> {path}")
-        say(f"Institute downloads today: {db.downloads_today()} of {cfg.daily_ceiling}.")
-        return path
+    from .db import DB
+    db = DB(cfg.data_dir / "paperbot.db")
+    try:
+        sync = make_sync(cfg, db)
+        # A turn of its own: only one computer is on the VPN at a time, and the download is
+        # counted in the records all computers share.
+        with sync.session(wait_s=120):
+            sync.guard(renew=True)
+            say("Connecting the VPN and trying the publisher...")
+            with vpn_session(make_vpn(cfg), cfg.vpn_disconnect_when_done):
+                with PublisherFetcher(cfg.browser, cfg.headless, max_pdf, 0) as pub:
+                    res = pub.fetch(paper)
+            if res.data:
+                db.log_download("try", cfg.owner_address)  # counts toward today's safe ceiling
+        if res.data:
+            path = out / "publisher.pdf"
+            path.write_bytes(res.data)
+            say(f"Saved {len(res.data) // 1024} KB from the publisher -> {path}")
+            say(f"Institute downloads today: {db.downloads_today()} of {cfg.daily_ceiling}.")
+            return path
+    finally:
+        db.close()
     say(f"Publisher: {res.status} - {res.reason}")
     return None

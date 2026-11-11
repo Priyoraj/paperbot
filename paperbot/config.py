@@ -10,7 +10,8 @@ from pathlib import Path
 import tomlkit
 
 APP_NAME = "PaperBot"
-VERSION = "0.1.0"
+VERSION = "0.2.0"
+SYNC_FOLDER = "PaperBot-sync"
 
 # Recommended safe limits. Publishers don't publish their thresholds; libraries report blocks
 # after e.g. 100 articles in 40 minutes, 25 accesses in 5 minutes, or caps of 100 a day. These
@@ -70,6 +71,10 @@ class Config:
     max_attachment_mb: float = 18
     keep_pdfs_days: int = 30
     poll_minutes: int = 10
+    # Working together with PaperBot on other computers that answer the same mailbox (sync.py).
+    # enabled = this computer may share its records; nothing is shared until the owner starts it.
+    sync_enabled: bool = True
+    sync_folder: str = SYNC_FOLDER
     path: Path | None = None
 
     # ---- derived -------------------------------------------------------
@@ -162,6 +167,8 @@ _MAP = {
     ("fetch", "max_attachment_mb"): "max_attachment_mb",
     ("fetch", "keep_pdfs_days"): "keep_pdfs_days",
     ("schedule", "poll_minutes"): "poll_minutes",
+    ("sync", "enabled"): "sync_enabled",
+    ("sync", "folder"): "sync_folder",
 }
 
 
@@ -180,6 +187,9 @@ def load(path: Path | None = None) -> Config:
             setattr(cfg, attr, doc[section][key])
     cfg.subject_keywords = [k.lower() for k in cfg.subject_keywords if k.strip()]
     cfg.auto_approve_domains = [d.lower().lstrip("@") for d in cfg.auto_approve_domains]
+    cfg.sync_folder = str(cfg.sync_folder).strip() or SYNC_FOLDER
+    if cfg.sync_folder.lower() == str(cfg.mailbox).strip().lower():
+        raise ConfigError("[sync] folder must not be the folder PaperBot reads requests from")
     hours_contain(cfg.vpn_allowed_hours, time(0, 0))  # validate early
     return cfg
 

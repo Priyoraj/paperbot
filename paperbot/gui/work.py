@@ -8,6 +8,7 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
 from ..app import fetch_one, manual_session_factory
+from ..sync import computer_name, tidy_name
 from .base import BODY, STRONG, clip, f, fill_tree, make_tree
 from .home import text_colors
 
@@ -183,15 +184,28 @@ class NeedsYouTab:
 
     def show_file(self) -> None:
         sel = [self._rows[i] for i in self.tree.selection() if i in self._rows]
-        if sel and sel[0]["pdf_path"]:
-            subprocess.run(["explorer", "/select,", os.path.normpath(sel[0]["pdf_path"])])
+        if not (sel and sel[0]["pdf_path"]):
+            return
+        path = os.path.normpath(sel[0]["pdf_path"])
+        if os.path.exists(path):
+            subprocess.run(["explorer", "/select,", path])
+            return
+        # A downloaded file stays on the computer that fetched it.
+        host, here = sel[0]["host"], computer_name()
+        elsewhere = bool(host) and host not in (here, tidy_name(here))
+        messagebox.showinfo(
+            "PaperBot",
+            (f"This file is on your other computer, {host}:\n\n{path}\n\nOpen PaperBot there "
+             "and press \"Show the file\"." if elsewhere else
+             f"The file isn't there any more:\n\n{path}"), parent=self.app.root)
 
     def mark_shared(self) -> None:
-        for i in self.tree.selection():
-            if i in self._rows and self._rows[i]["status"] == "failed":
-                self.app.db.update_item(int(i), owner_notified=2)
-        self._sig = None
-        self.app.refresh_all()
+        ids = [int(i) for i in self.tree.selection()
+               if i in self._rows and self._rows[i]["status"] == "failed"]
+        if ids:
+            self._sig = None
+            self.app.run_task("Taking it off the list…",
+                              lambda: self.app.bot().mark_shared(ids), lock=True)
 
 
 class TryTab:

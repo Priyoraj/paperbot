@@ -9,12 +9,14 @@ from tkinter import messagebox, ttk
 
 from .. import config as config_mod
 from .. import winsvc
-from ..app import build_bot, setup_logging, single_instance, vpn_signin_saved
+from ..app import (SyncError, Together, build_bot, make_sync, setup_logging, single_instance,
+                   together, vpn_signin_saved)
 from ..db import DB
 from .base import Bg, STRONG, TITLE, apply_theme, f, friendly, make_dpi_aware
 
 log = logging.getLogger("paperbot.gui")
 ASSETS = Path(__file__).resolve().parent.parent / "assets"
+SHARED_EVERY_MS = 5 * 60 * 1000    # how often to pick up what another computer did
 
 
 class App:
@@ -30,6 +32,11 @@ class App:
         self.task: winsvc.TaskStatus | None = None
         self.vpn_saved: bool | None = None
         self._busy = 0
+        # Working together with PaperBot on another computer (sync.py)
+        self.together: Together | None = None
+        self.sync_problem = ""            # e.g. "PaperBot on LAPTOP is newer than ..."
+        self.started_here = False         # the owner pressed Start in this window
+        self._picking_up = False
         root.title("PaperBot")
         root.geometry(f"{self.px(1120)}x{self.px(740)}")
         root.minsize(self.px(960), self.px(640))
@@ -43,6 +50,7 @@ class App:
         self.refresh_vpn_status()
         root.after(4000, self._tick)
         root.after(30000, self._slow_tick)
+        root.after(1500, self._shared_tick)
 
     def px(self, n: float) -> int:
         return int(n * self.scale)
@@ -92,9 +100,10 @@ class App:
         """Thread-safe status update for workers."""
         self.bg.call(self.set_status, text)
 
-    def run_task(self, label: str, fn, done=None, lock: bool = False) -> None:
-        """Run fn() in the background with a busy indicator; errors become dialogs.
-        lock=True waits for (and blocks) the automatic background check."""
+    def run_task(self, label: str, fn, done=None, lock: bool = False, failed=None) -> None:
+        """Run fn() in the background with a busy indicator; errors become dialogs (and
+        failed(exc) is called, if given). lock=True waits for (and blocks) the automatic
+        background check."""
         self._busy += 1
         self.set_status(label)
         self.progress.pack(side="right")
@@ -122,6 +131,8 @@ class App:
 
         def bad(exc):
             finish()
+            if failed:
+                failed(exc)
             self.set_status("Something went wrong - see the message.")
             log.error("%s failed: %s", label, exc)
             messagebox.showerror("PaperBot", friendly(exc), parent=self.root)
@@ -135,8 +146,67 @@ class App:
         self.cfg = config_mod.load()
         self.refresh_all()
 
+    # ---- working together with PaperBot on another computer -------------------------
+    def _note_together(self) -> None:
+        """Where this computer stands; say so when it has just joined in by itself."""
+        was, here = self.together, together(self.cfg, self.db)
+        self.together = here
+        if was is None or was.joined or not here.joined:
+            return
+        if self.started_here:             # the Start button reports on its own
+            self.started_here = False
+            return
+        who = " and ".join(here.others) or "your other computer"
+        text = (f"PaperBot on {who} shares its records through your mailbox, and this "
+                "computer has joined in.\n\nFrom now on they answer your mailbox as one: every "
+                "request is answered once, and people, requests and daily limits are the same "
+                "on both.\n\nWhat this computer had recorded before was put together with the "
+                "rest, and a copy from before is kept in "
+                f"{self.cfg.data_dir / 'paperbot.before-sharing.db'}")
+        self.set_status(f"This computer now works together with PaperBot on {who}.")
+        self.root.after(300, lambda: messagebox.showinfo("PaperBot", text, parent=self.root))
+
+    def refresh_shared(self) -> None:
+        """Pick up what PaperBot on another computer did - and join in, the first time
+        shared records turn up in the mailbox. Quietly: being offline is no news."""
+        if self._picking_up or self._busy:
+            return
+        cfg = self.cfg
+        self._picking_up = True
+
+        def work():
+            db = DB(cfg.data_dir / "paperbot.db")
+            try:
+                make_sync(cfg, db).refresh()
+            finally:
+                db.close()
+
+        def ok(_):
+            self._picking_up, self.sync_problem = False, ""
+            self.refresh_all()
+
+        def bad(exc):
+            self._picking_up = False
+            if isinstance(exc, SyncError):          # needs the owner: shown on Home
+                if str(exc) != self.sync_problem:
+                    log.error("working together: %s", exc)
+                self.sync_problem = str(exc)
+            else:                                    # offline, busy...: next time
+                log.debug("couldn't look at the shared records: %s", exc)
+            self.refresh_all()
+
+        self.bg.run(work, ok, bad)
+
+    def _shared_tick(self) -> None:
+        self.refresh_shared()
+        self.root.after(SHARED_EVERY_MS, self._shared_tick)
+
     # ---- refreshing ---------------------------------------------------------------
     def refresh_all(self) -> None:
+        try:
+            self._note_together()
+        except Exception:  # noqa: BLE001 - e.g. database busy for a moment
+            log.exception("couldn't read where working together stands")
         current = self.nb.select()
         for tab in self.tabs.values():
             if tab.always_refresh or str(tab.frame) == current:

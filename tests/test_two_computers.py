@@ -308,6 +308,27 @@ def test_on_its_own_paperbot_works_as_before_and_writes_nothing_to_the_mailbox(t
     assert box.saved == 0 and box.messages is None
 
 
+def test_what_the_owner_does_in_the_app_on_one_computer_shows_on_the_other(pair):
+    pc, laptop = pair
+    with pc.sync.session():                 # a paper too large to email waits on the PC
+        rid = pc.db.add_request("<big@uni.edu>", "asha@uni.edu", "Asha", "Paper request", "",
+                                "done")
+        big = pc.db.add_item(rid, "10.1000/big", "doi", "10.1000/big")
+        pc.db.update_item(big, status="failed", pdf_path="C:/pdfs/big.pdf", host="OFFICE-PC",
+                          reason="too large to email (40 MB); Priya will share it another way",
+                          reported=1, owner_notified=1)
+    laptop.sync.refresh()
+    (todo,) = laptop.db.owner_todo()
+    assert todo["host"] == "OFFICE-PC"      # the app there says which computer has the file
+    saved = pc.box.saved
+    laptop.bot().mark_shared([todo["id"]])  # "I've shared it", pressed on the laptop
+    laptop.bot().forget("asha@uni.edu")     # ...and "Forget"
+    assert pc.box.saved > saved             # each went through a turn: the mailbox knows
+    pc.sync.refresh()
+    assert pc.db.owner_todo() == [] and pc.db.person("asha@uni.edu") is None
+    assert in_step(pc, laptop)
+
+
 def test_a_paper_picked_just_before_joining_is_never_mistaken_for_another(tmp_path):
     mail, box = FakeMail(), FakeBox()
     pc, laptop = Computer(tmp_path, "PC", mail, box), Computer(tmp_path, "LAPTOP", mail, box)

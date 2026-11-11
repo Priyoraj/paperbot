@@ -137,17 +137,20 @@ class PeopleTab:
                 "PaperBot", "Block " + ", ".join(emails) + "?\nTheir requests will be ignored "
                 "from now on.", parent=self.app.root):
             self.app.run_task("Blocking…", lambda: [self.app.bot().decide(e, approve=False)
-                                                    for e in emails])
+                                                    for e in emails], lock=True)
 
     def forget(self) -> None:
         emails = self._selected()
         if emails and messagebox.askyesno(
                 "PaperBot", "Forget " + ", ".join(emails) + "?\nTheir next request will be "
                 "treated as first-time.", parent=self.app.root):
-            for e in emails:
-                self.app.db.forget_person(e)
+            def work():                   # through the bot: other computers must hear of it
+                bot = self.app.bot()
+                for e in emails:
+                    bot.forget(e)
+
             self._sig = None
-            self.app.refresh_all()
+            self.app.run_task("Forgetting…", work, lock=True)
 
 
 class RequestsTab:

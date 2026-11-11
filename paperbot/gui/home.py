@@ -99,6 +99,13 @@ class HomeTab:
                                    command=self.toggle_auto)
         self.auto_btn.pack(side="right")
 
+        # -- working together with PaperBot on another computer (shown once that is on)
+        self.together_row = ttk.Frame(self.frame)
+        self.together_row.pack(fill="x")
+        self.together_text = ttk.Label(self.together_row, text="", justify="left",
+                                       wraplength=px(1040), cursor="hand2")
+        self.together_text.bind("<Button-1>", lambda e: app.show("settings"))
+
         # -- check now
         row = ttk.Frame(self.frame)
         row.pack(fill="x", pady=(px(14), px(4)))
@@ -173,6 +180,23 @@ class HomeTab:
                      "sign in to Windows.")
             self.auto_btn.configure(text="Turn on", style="Accent.TButton")
 
+        here = app.together
+        if app.sync_problem:
+            note, color = "Working together has stopped: " + app.sync_problem, pal["bad"]
+        elif here is not None and here.joined:
+            note, color = "More than one computer - " + here.summary, pal["muted"]
+            if here.synced_at:
+                day = "" if here.synced_at.date() == datetime.now().date() else \
+                    here.synced_at.strftime("%b %d ")
+                note += f" Records last exchanged {day}{here.synced_at:%H:%M}."
+        else:
+            note, color = "", pal["muted"]
+        if note:
+            self.together_text.configure(text=note, foreground=color)
+            self.together_text.pack(anchor="w", pady=(app.px(10), 0))
+        else:
+            self.together_text.pack_forget()
+
         entries = read_activity(cfg.data_dir / "logs" / "paperbot.log")
         if entries != self._last_log:
             self._last_log = entries
@@ -210,8 +234,11 @@ class HomeTab:
                                          app.set_status("Automatic mode is on.")))
 
     def check_now(self) -> None:
+        def work():
+            bot = self.app.bot()
+            bot.run_once(bot.wait_s)      # if another computer is at work: wait a little
+
         if self._ready():
-            self.app.run_task("Checking mail and answering requests…",
-                              lambda: self.app.bot().run_once(), lock=True,
+            self.app.run_task("Checking mail and answering requests…", work, lock=True,
                               done=lambda _: self.app.set_status(
                                   "Mail checked - see Recent activity."))

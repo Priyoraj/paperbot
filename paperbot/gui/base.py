@@ -13,7 +13,7 @@ import traceback
 from tkinter import font as tkfont
 from tkinter import ttk
 
-from ..app import Busy
+from ..app import Busy, LockLost, SyncError
 from ..config import ConfigError
 
 PALETTES = {
@@ -87,6 +87,12 @@ def friendly(exc: BaseException) -> str:
         return f"Please finish setup first: {exc}"
     if isinstance(exc, Busy):
         return str(exc)
+    if isinstance(exc, LockLost):
+        return ("PaperBot stopped before it finished: this computer was asleep or offline for "
+                "too long, and PaperBot on your other computer may have carried on. Nothing is "
+                "done twice this way. Please try again.")
+    if isinstance(exc, SyncError):
+        return f"Working together with your other computer isn't possible right now: {exc}"
     if isinstance(exc, VpnError):
         return f"VPN problem: {exc}"
     if isinstance(exc, (imaplib.IMAP4.error, smtplib.SMTPAuthenticationError)):

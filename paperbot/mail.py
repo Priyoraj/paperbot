@@ -68,13 +68,27 @@ class ImapSmtpMail:
         self.cfg = cfg
         self.password = password
 
+    def connect(self) -> imaplib.IMAP4:
+        """A logged-in IMAP connection; the caller logs out. Also used for the folder that
+        holds the records several computers share (sync.ImapStore)."""
+        cfg = self.cfg
+        imap = imaplib.IMAP4_SSL(cfg.imap_host, cfg.imap_port, timeout=60)
+        try:
+            imap.login(cfg.mail_username, self.password)
+        except BaseException:
+            try:
+                imap.shutdown()
+            except Exception:  # noqa: BLE001 - best effort
+                pass
+            raise
+        return imap
+
     # ---- receive ------------------------------------------------------
     def fetch(self, since_days: int, wanted: Callable[[EmailMessage], bool]) -> list[Incoming]:
         cfg = self.cfg
         out: list[Incoming] = []
-        imap = imaplib.IMAP4_SSL(cfg.imap_host, cfg.imap_port, timeout=60)
+        imap = self.connect()
         try:
-            imap.login(cfg.mail_username, self.password)
             typ, _ = imap.select(f'"{cfg.mailbox}"', readonly=True)
             if typ != "OK":
                 raise RuntimeError(f"cannot open mailbox {cfg.mailbox!r}")
@@ -116,9 +130,7 @@ class ImapSmtpMail:
         log.info("sent %r to %s", msg["Subject"], msg["To"])
 
     def check_login(self) -> None:
-        imap = imaplib.IMAP4_SSL(self.cfg.imap_host, self.cfg.imap_port, timeout=60)
-        imap.login(self.cfg.mail_username, self.password)
-        imap.logout()
+        self.connect().logout()
 
 
 def _fetch_pairs(data) -> Iterable[tuple[bytes, bytes]]:

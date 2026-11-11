@@ -11,11 +11,13 @@ import time
 from pathlib import Path
 
 from . import config as config_mod
-from .app import (Busy, build_bot, fetch_one, make_vpn, manual_session_factory, set_secret,
-                  setup_checks, setup_logging, single_instance)
+from .app import (Busy, LockLost, SyncError, build_bot, check_sharing, fetch_one, make_vpn,
+                  manual_session_factory, set_secret, setup_checks, setup_logging,
+                  single_instance, start_sharing, stop_sharing, together)
 from .config import ConfigError
 
 log = logging.getLogger("paperbot")
+WAIT_FOR_OTHER_S = 60    # an automatic check waits this long while another computer works
 
 
 def cmd_init(args) -> None:
@@ -56,14 +58,25 @@ def cmd_check(args) -> None:
           else "Fix the FAIL lines above, then run `paperbot check` again.")
 
 
+def check_once(cfg) -> None:
+    """One automatic check. Not an error: PaperBot is already at work - here or on another
+    computer that shares these records - or this computer's turn ran out under it."""
+    try:
+        with single_instance(cfg):
+            try:
+                build_bot(cfg).run_once(wait_s=WAIT_FOR_OTHER_S)
+            except Busy as exc:          # "PaperBot on LAPTOP is working right now"
+                log.info("skipped this check: %s", str(exc).split(" - ")[0])
+            except LockLost as exc:
+                log.warning("stopped this check: %s", exc)
+    except Busy:
+        log.info("skipped this check: another PaperBot run is in progress on this computer")
+
+
 def cmd_run(args) -> None:
     cfg = config_mod.load()
     cfg.check_ready()
-    try:
-        with single_instance(cfg):
-            build_bot(cfg).run_once()
-    except Busy:
-        log.info("skipped: another PaperBot run is in progress")
+    check_once(cfg)
 
 
 def cmd_watch(args) -> None:
@@ -72,10 +85,7 @@ def cmd_watch(args) -> None:
     print(f"Checking mail every {cfg.poll_minutes} min. Ctrl+C to stop.")
     while True:
         try:
-            with single_instance(cfg):
-                build_bot(cfg).run_once()
-        except Busy as exc:
-            log.warning("%s", exc)
+            check_once(cfg)
         except Exception:  # noqa: BLE001
             log.exception("run failed")
         time.sleep(cfg.poll_minutes * 60)
@@ -86,6 +96,9 @@ def cmd_status(args) -> None:
     from .db import DB
     db = DB(cfg.data_dir / "paperbot.db")
     print(f"First-time requesters need approval: {'ON' if cfg.require_approval else 'OFF'}")
+    here = together(cfg, db)
+    if here.joined or not here.allowed:
+        print(f"More than one computer: {here.summary}")
     if cfg.auto_approve_domains:
         print(f"Always trusted domains: {', '.join(cfg.auto_approve_domains)}")
     print(f"Institute downloads today: {db.downloads_today()} of {cfg.daily_ceiling} "
@@ -107,13 +120,14 @@ def cmd_status(args) -> None:
 
 def cmd_decide(args) -> None:
     cfg = config_mod.load()
-    bot = build_bot(cfg)
-    if args.command == "forget":
-        bot.db.forget_person(args.email)
-        print(f"Forgot {args.email}; their next request is treated as first-time.")
-        return
     approve = args.command == "approve"
-    n = bot.decide(args.email, approve=approve)
+    with single_instance(cfg, wait_s=120):
+        bot = build_bot(cfg)
+        if args.command == "forget":
+            bot.forget(args.email)
+            print(f"Forgot {args.email}; their next request is treated as first-time.")
+            return
+        n = bot.decide(args.email, approve=approve)
     print(f"{args.email} {'approved' if approve else 'denied'}.")
     if approve and n:
         print(f"{n} waiting request(s) will be answered on the next run (or now: paperbot run).")
@@ -125,10 +139,39 @@ def cmd_approval(args) -> None:
                                          else "get papers without asking you."))
 
 
+def cmd_sync(args) -> None:
+    """PaperBot on more than one computer: status | on | off | check."""
+    cfg = config_mod.load()
+    if args.action == "status":
+        from .db import DB
+        here = together(cfg, DB(cfg.data_dir / "paperbot.db"))
+        print(here.summary)
+        if here.synced_at:
+            print(f"Records last exchanged with the mailbox: {here.synced_at:%d %b %H:%M} "
+                  f"(folder {cfg.sync_folder}).")
+        if not here.joined and here.allowed:
+            print("To let PaperBot on another computer work together with this one:  "
+                  "paperbot sync on")
+    elif args.action == "check":
+        print("Trying out the mailbox (saves, reads and deletes one test message)...")
+        print(check_sharing(cfg))
+    elif args.action == "on":
+        with single_instance(cfg, wait_s=120):
+            print(start_sharing(cfg))
+    else:
+        with single_instance(cfg, wait_s=120):
+            print(stop_sharing(cfg))
+
+
 def cmd_fetch(args) -> None:
     cfg = config_mod.load()
     mode = "vpn" if args.vpn_only else ("free+vpn" if args.vpn else "free")
-    fetch_one(cfg, args.what, mode, Path(args.out) if args.out else None)
+    out = Path(args.out) if args.out else None
+    if mode == "free":
+        fetch_one(cfg, args.what, mode, out)
+    else:                       # the VPN part must not overlap the automatic check's
+        with single_instance(cfg, wait_s=120):
+            fetch_one(cfg, args.what, mode, out)
 
 
 def cmd_manual(args) -> None:
@@ -209,19 +252,29 @@ def main(argv=None) -> None:
     p = sub.add_parser("vpn", help="VPN control for testing")
     p.add_argument("action", choices=["up", "down", "status"])
     p.set_defaults(fn=cmd_vpn)
+    p = sub.add_parser("sync", help="PaperBot on more than one computer, working together "
+                                    "through the mailbox")
+    p.add_argument("action", choices=["status", "on", "off", "check"],
+                   help="status: where this computer stands; on: start (or join); off: this "
+                        "computer keeps its own records again; check: try out the mailbox")
+    p.set_defaults(fn=cmd_sync)
     args = ap.parse_args(argv)
 
     try:
         cfg = config_mod.load() if args.command != "init" else None
     except ConfigError:
         cfg = None
-    setup_logging(cfg, args.verbose or args.command in ("fetch", "manual", "vpn", "check"))
+    setup_logging(cfg, args.verbose or args.command in ("fetch", "manual", "vpn", "check",
+                                                        "sync"))
     try:
         args.fn(args)
     except ConfigError as exc:
         raise SystemExit(f"Config problem: {exc}")
-    except Busy as exc:
+    except (Busy, LockLost) as exc:
         raise SystemExit(str(exc))
+    except SyncError as exc:
+        log.error("%s", exc)
+        raise SystemExit(f"Working together: {exc}")
     except KeyboardInterrupt:
         raise SystemExit("Stopped.")
     except Exception as exc:  # noqa: BLE001 - log it for the scheduled task, show it to people

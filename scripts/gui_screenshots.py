@@ -129,14 +129,18 @@ if "--light" in sys.argv:
 base.make_dpi_aware()
 import tkinter as tk  # noqa: E402
 
+from paperbot.gui import window as gui_window  # noqa: E402
 from paperbot.gui.window import App  # noqa: E402
+from paperbot.sync import NoSync  # noqa: E402
+
+gui_window.make_sync = lambda cfg, db: NoSync()   # the demo never looks at a real mailbox
 
 root = tk.Tk()
 app = App(root)
 root.geometry("+30+30")
 root.attributes("-topmost", True)
 screens = ["home", "needs", "needs-waiting", "people", "requests", "try", "settings",
-           "settings-custom", "share"]
+           "settings-custom", "share", "home-together", "settings-together"]
 
 
 def show(i: int) -> None:
@@ -160,6 +164,25 @@ def show(i: int) -> None:
         tab._sync_limits(user_toggled=True)
         tab.vars[("access", "max_papers_per_day")][1].set("60")
         tab.vars[("access", "max_papers_per_hour")][1].set("20")
+        root.after(1800, lambda: shoot(i))
+        return
+    if screens[i] == "home-together":  # PaperBot on a second computer has joined in
+        db.set_meta(node="a1b2c3", joined="1", synced_at=now_iso())
+        db.touch_computer("OFFICE-PC-a1b2c3", "OFFICE-PC", True)
+        db.touch_computer("LAPTOP-d4e5f6", "LAPTOP", True)
+        app.started_here = True        # no "this computer has joined" dialog in the demo
+        app.show("home")
+        app.refresh_all()
+        root.after(1800, lambda: shoot(i))
+        return
+    if screens[i] == "settings-together":  # Settings, scrolled to "More than one computer"
+        tab = app.tabs["settings"]
+        app.show("settings")
+        tab.load_values()
+        app.refresh_all()
+        root.update()
+        top = tab.together_status.winfo_y() - app.px(150)
+        tab.scroll.canvas.yview_moveto(max(0, top) / max(1, tab.scroll.body.winfo_height()))
         root.after(1800, lambda: shoot(i))
         return
     app.show(screens[i])

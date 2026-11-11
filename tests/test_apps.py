@@ -74,29 +74,11 @@ def test_installer_zip_gives_batch_files_windows_line_endings(tmp_path):
     assert zf.read("PaperBot/Install PaperBot.cmd") == b"@echo off\r\ngoto :done\r\n:done\r\n"
 
 
-def test_app_window_opens_and_every_screen_refreshes(tmp_path, monkeypatch):
-    tk = pytest.importorskip("tkinter")
-    monkeypatch.setenv("PAPERBOT_HOME", str(tmp_path))
-    (tmp_path / "config.toml").write_text('[owner]\nname = "Priya"\n[mail]\nusername = '
-                                          '"p@example.com"\n', encoding="utf-8")
-    from paperbot import winsvc
-    from paperbot.gui import window as gui_main
-    from paperbot.gui import settings as gui_settings
-    monkeypatch.setattr(gui_main.winsvc, "status", lambda: winsvc.TaskStatus(False))
-    monkeypatch.setattr(gui_main, "vpn_signin_saved", lambda cfg: True)
-    monkeypatch.setattr(gui_settings, "vpn_profiles", lambda: ["Institute VPN"])
-    try:
-        root = tk.Tk()
-    except tk.TclError:
-        pytest.skip("no display")
-    root.withdraw()
-    try:
-        app = gui_main.App(root)
-        for key in app.tabs:
-            app.show(key)
-            app.refresh_all()
-            root.update()
-        assert app.cfg.owner_name == "Priya"
-        assert "Automatic mode" in app.mode_label.cget("text")
-    finally:
-        root.destroy()
+def test_app_window_opens_and_every_screen_refreshes(window):      # fixture: conftest.py
+    app = window
+    for key in app.tabs:
+        app.show(key)
+        app.refresh_all()
+        app.root.update()
+    assert app.cfg.owner_name == "Priya"
+    assert "Automatic mode" in app.mode_label.cget("text")
