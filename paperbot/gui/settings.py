@@ -500,11 +500,16 @@ class SettingsTab:
             return
         set_secret(f"mail:{cfg.mail_username}", pw)
         self.refresh()
+
+        def works(_):
+            messagebox.showinfo("PaperBot", "Saved - and the mail login works.",
+                                parent=self.app.root)
+            # Now the mailbox can be read: if PaperBot on another computer shares its
+            # records there, join in straight away rather than at the next 5-minute look.
+            self.app.refresh_shared()
+
         self.app.run_task("Testing the mail login…",
-                          lambda: self.app.bot().mail.check_login(),
-                          done=lambda _: messagebox.showinfo(
-                              "PaperBot", "Saved - and the mail login works.",
-                              parent=self.app.root))
+                          lambda: self.app.bot().mail.check_login(), done=works)
 
     def set_vpn_password(self) -> None:
         cfg = self.app.cfg

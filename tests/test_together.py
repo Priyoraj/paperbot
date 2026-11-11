@@ -270,6 +270,32 @@ def test_pressing_start_reports_once_not_twice(window):
     assert app.said == [] and app.started_here is False
 
 
+def test_the_app_joins_by_itself_when_the_other_computer_shares(window, tmp_path, monkeypatch):
+    from fakes import FakeBox, FakeClock, FakeStore
+    from paperbot.gui import window as gui_main
+    app, box = window, FakeBox()
+    pc = Sync(DB(tmp_path / "pc" / "paperbot.db"), FakeStore(box), "OFFICE-PC",
+              tmp_path / "pc" / "sync.lock", clock=FakeClock(box), heartbeat=False)
+    pc.db.add_person("asha@uni.edu", "Asha", "approved")
+    pc.start()                                   # Start was pressed on the office PC
+
+    def this_computers_part(cfg, db):            # what the app builds for itself (the laptop)
+        return Sync(db, FakeStore(box), "LAPTOP", cfg.data_dir / "sync.lock",
+                    clock=FakeClock(box), heartbeat=False,
+                    backup_path=cfg.data_dir / "paperbot.before-sharing.db")
+
+    monkeypatch.setattr(gui_main, "make_sync", this_computers_part)
+    app.refresh_shared()         # as when the app starts, or the mail password was just saved
+    deadline = time.monotonic() + 10
+    while not app.said and time.monotonic() < deadline:
+        app.root.update()
+        time.sleep(0.05)
+    assert app.together.joined and app.together.others == ["OFFICE-PC"]
+    assert len(app.said) == 1 and "PaperBot on OFFICE-PC shares its records" in app.said[0]
+    assert app.db.person("asha@uni.edu")["status"] == "approved"     # People shows her now
+    assert (app.cfg.data_dir / "paperbot.before-sharing.db").exists()
+
+
 def test_problems_are_put_in_plain_words():
     from paperbot.gui.base import friendly
     assert friendly(Busy("PaperBot on LAPTOP is working right now - try again in a minute")) \
