@@ -72,3 +72,9 @@ poll_minutes = 10         # used by `paperbot watch` and the scheduled task inst
 # mode on in one computer only.
 enabled = true
 folder = "PaperBot-sync"  # the mailbox folder (a Gmail label) that holds the shared records
+
+[notify]
+# true = a Windows notification on this computer when a paper comes to need you (a download by
+# hand, or a file too large to email). Clicking it opens PaperBot on "Needs you". The email
+# "[PaperBot] N paper(s) need you" is sent either way.
+desktop = true

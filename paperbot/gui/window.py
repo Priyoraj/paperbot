@@ -1,6 +1,7 @@
 """PaperBot desktop app: the main window."""
 from __future__ import annotations
 
+import argparse
 import logging
 import sys
 import tkinter as tk
@@ -8,20 +9,23 @@ from pathlib import Path
 from tkinter import messagebox, ttk
 
 from .. import config as config_mod
-from .. import winsvc
+from .. import notify, winsvc
 from ..app import (SyncError, Together, build_bot, make_sync, setup_logging, single_instance,
                    together, vpn_signin_saved)
 from ..db import DB
-from .base import Bg, STRONG, TITLE, apply_theme, f, friendly, make_dpi_aware
+from .base import Bg, STRONG, TITLE, apply_theme, f, fit_window, friendly, make_dpi_aware
+from .instance import Instance
 
 log = logging.getLogger("paperbot.gui")
 ASSETS = Path(__file__).resolve().parent.parent / "assets"
 SHARED_EVERY_MS = 5 * 60 * 1000    # how often to pick up what another computer did
+LISTEN_EVERY_MS = 400              # how often to check whether a second start wants us forward
 
 
 class App:
-    def __init__(self, root: tk.Tk):
+    def __init__(self, root: tk.Tk, instance: Instance | None = None):
         self.root = root
+        self.instance = instance
         self.pal = apply_theme(root)
         self.scale = root.winfo_fpixels("1i") / 96
         self.bg = Bg(root)
@@ -30,6 +34,8 @@ class App:
         setup_logging(self.cfg, console=False)
         self.db = DB(self.cfg.data_dir / "paperbot.db")
         self.task: winsvc.TaskStatus | None = None
+        self.app_start: winsvc.TaskStatus | None = None   # "open the app after sign-in"
+        self.notify_setting: str | None = None            # what Windows says: 'Enabled', ...
         self.vpn_saved: bool | None = None
         self._busy = 0
         # Working together with PaperBot on another computer (sync.py)
@@ -38,8 +44,7 @@ class App:
         self.started_here = False         # the owner pressed Start in this window
         self._picking_up = False
         root.title("PaperBot")
-        root.geometry(f"{self.px(1120)}x{self.px(740)}")
-        root.minsize(self.px(960), self.px(640))
+        fit_window(root, self.px(1120), self.px(740), self.px(960), self.px(640))
         icon = ASSETS / "paperbot.png"
         if icon.exists():
             self._icon = tk.PhotoImage(file=str(icon))
@@ -47,10 +52,14 @@ class App:
         self._build()
         self.refresh_all()
         self.refresh_task_status()
+        self.refresh_app_start()
+        self.refresh_notify_setting()
         self.refresh_vpn_status()
         root.after(4000, self._tick)
         root.after(30000, self._slow_tick)
         root.after(1500, self._shared_tick)
+        if instance is not None:
+            root.after(LISTEN_EVERY_MS, self._listen)
 
     def px(self, n: float) -> int:
         return int(n * self.scale)
@@ -91,6 +100,28 @@ class App:
 
     def show(self, key: str) -> None:
         self.nb.select(self.tabs[key].frame)
+
+    def come_forward(self, page: str = "") -> None:
+        """The app was started a second time, or a notification was clicked: show this
+        window (on `page`, if one was named) instead of opening another."""
+        root = self.root
+        root.deiconify()
+        root.lift()
+        root.attributes("-topmost", True)        # in front of whatever is there now...
+        root.after(400, lambda: root.attributes("-topmost", False))   # ...without staying so
+        try:
+            root.focus_force()
+        except tk.TclError:
+            pass
+        if page in self.tabs:
+            self.show(page)
+        self.refresh_all()
+
+    def _listen(self) -> None:
+        page = self.instance.asked()
+        if page is not None:
+            self.come_forward(page)
+        self.root.after(LISTEN_EVERY_MS, self._listen)
 
     # ---- status & background work ----------------------------------------------
     def set_status(self, text: str) -> None:
@@ -214,7 +245,9 @@ class App:
                     tab.refresh()
                 except Exception:  # noqa: BLE001 - e.g. database busy for a moment
                     log.exception("refresh of %s failed", tab.key)
-        todo = len(self.db.owner_todo())
+        waiting = self.db.owner_todo()
+        self._announce(waiting)
+        todo = len(waiting)
         pending = sum(1 for p in self.db.people() if p["status"] == "pending")
         self.nb.tab(self.tabs["needs"].frame, text=f"Needs you ({todo})" if todo else "Needs you")
         self.nb.tab(self.tabs["people"].frame,
@@ -224,11 +257,55 @@ class App:
             text="●  Automatic mode ON" if on else "○  Automatic mode OFF",
             foreground=self.pal["ok"] if on else self.pal["muted"])
 
+    def _announce(self, waiting) -> None:
+        """A Windows notification for papers that have newly come to need the owner. The
+        background check does the same when it ends; whichever is first speaks, once."""
+        try:
+            fresh = notify.claim_new(self.cfg, self.db, waiting)
+        except Exception:  # noqa: BLE001 - e.g. database busy for a moment
+            log.exception("couldn't work out what to announce")
+            return
+        if fresh:
+            title, lines = notify.wording(fresh)
+            self.bg.run(lambda: notify.show_toast(title, lines), fail=lambda exc: log.warning(
+                "couldn't show the Windows notification: %s", exc))
+
     def refresh_task_status(self) -> None:
         def got(st):
             self.task = st
             self.refresh_all()
         self.bg.run(winsvc.status, got)
+
+    def refresh_app_start(self) -> None:
+        def got(st):
+            self.app_start = st
+            self.refresh_all()
+        self.bg.run(winsvc.app_start_status, got)
+
+    @property
+    def notifications_blocked(self) -> str:
+        """Why PaperBot's notifications can't appear although the owner wants them - '' if
+        they can, or if that isn't known (yet)."""
+        if not self.cfg.notify_desktop or self.notify_setting in (None, "", "Enabled"):
+            return ""
+        return str(notify.NotificationsOff(self.notify_setting))
+
+    def refresh_notify_setting(self) -> None:
+        """Ask Windows whether it will show PaperBot's notifications at all."""
+        if not self.cfg.notify_desktop:
+            return
+
+        def got(setting):
+            self.notify_setting = setting
+            self.refresh_all()
+        self.bg.run(notify.windows_setting, got)
+
+    def open_windows_notification_settings(self) -> None:
+        import os
+        try:
+            os.startfile(notify.WINDOWS_SETTINGS)
+        except (AttributeError, OSError) as exc:
+            log.warning("couldn't open Windows' notification settings: %s", exc)
 
     def refresh_vpn_status(self) -> None:
         def got(saved):
@@ -243,23 +320,41 @@ class App:
 
     def _slow_tick(self) -> None:
         self.refresh_task_status()
+        if self.notifications_blocked:    # until the owner has switched them on in Windows
+            self.refresh_notify_setting()
         self.root.after(30000, self._slow_tick)
 
 
-def main() -> None:
+def main(argv: list[str] | None = None) -> None:
+    """`--minimized`: start in the taskbar (the sign-in task). `--show needs` or
+    `--show paperbot:needs`: open on that page (a click on a notification)."""
+    ap = argparse.ArgumentParser(prog="paperbot-app", add_help=False)
+    ap.add_argument("--minimized", action="store_true")
+    ap.add_argument("--show", default="")
+    args, _ = ap.parse_known_args(argv)        # whatever else arrives with a link is ignored
+    page = notify.page_from(args.show)
     make_dpi_aware()
     if sys.platform == "win32":  # own taskbar entry + icon instead of "pythonw"
         try:
             import ctypes
-            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("PaperBot.Desktop")
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(notify.APP_ID)
         except (AttributeError, OSError):
             pass
+    instance = Instance(config_mod.home_dir())
+    if not instance.first:                     # PaperBot is open already: no second window
+        if not args.minimized:                 # a person or a notification asked for it
+            instance.ask_to_show(page)
+        return
     root = tk.Tk()
     try:
-        App(root)
+        app = App(root, instance)
     except Exception as exc:  # noqa: BLE001 - show startup problems instead of vanishing
         messagebox.showerror("PaperBot couldn't start", friendly(exc))
         raise
+    if page:
+        app.show(page)
+    if args.minimized:
+        root.iconify()
     root.mainloop()
 
 

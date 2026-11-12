@@ -8,7 +8,7 @@ import webbrowser
 from tkinter import messagebox, ttk
 
 from .. import config as config_mod
-from .. import winsvc
+from .. import notify, winsvc
 from ..config import RECOMMENDED_LIMITS
 from ..app import (check_sharing, has_mail_password, make_vpn, set_secret, setup_checks,
                    start_sharing, stop_sharing, vpn_credentials, vpn_profiles)
@@ -46,6 +46,11 @@ SECTIONS = [
         ("fetch", "headless", "Hide the browser window while fetching", "bool", ""),
         ("schedule", "poll_minutes", "Automatic mode checks mail every (minutes)", "int", ""),
         ("fetch", "keep_pdfs_days", "Keep downloaded PDFs for (days)", "int", ""),
+    ]),
+    ("Notifications", [
+        ("notify", "desktop", "Show a Windows notification when a paper needs you", "bool",
+         "a download by hand, or a file too large to email; you get the email either way"),
+        ("@notifytest",),
     ]),
     ("More than one computer", [("@together",)]),
     ("Advanced mail settings", [
@@ -122,6 +127,26 @@ class SettingsTab:
                     continue
                 if spec[0] == "@together":
                     row = self._together_block(body, row)
+                    continue
+                if spec[0] == "@notifytest":
+                    line = ttk.Frame(body)
+                    line.grid(row=row, column=0, columnspan=3, sticky="w", padx=px(18),
+                              pady=(px(6), 0))
+                    ttk.Button(line, text="Send a test notification",
+                               command=self.test_notification).pack(side="left")
+                    link = ttk.Label(line, text="Windows notification settings",
+                                     foreground=pal["accent"], cursor="hand2")
+                    link.pack(side="left", padx=px(12))
+                    link.bind("<Button-1>",
+                              lambda e: self.app.open_windows_notification_settings())
+                    ttk.Label(line, text="clicking a notification opens PaperBot on \"Needs "
+                                         "you\"", foreground=pal["muted"]).pack(side="left")
+                    row += 1
+                    self.notify_status = ttk.Label(body, text="", font=f(STRONG),
+                                                   wraplength=px(1000), justify="left")
+                    self.notify_status.grid(row=row, column=0, columnspan=3, sticky="w",
+                                            padx=px(18), pady=(px(6), 0))
+                    row += 1
                     continue
                 section, key, label, kind, hint = spec
                 row = self._field(body, row, section, key, label, kind, hint)
@@ -340,6 +365,14 @@ class SettingsTab:
         if saved and vpn_credentials(cfg) is None:
             self.vpn_btn.pack_forget()
 
+        blocked = app.notifications_blocked       # Windows itself may be set to show none
+        if blocked:
+            self.notify_status.configure(text="✗ " + blocked, foreground=pal["bad"])
+        elif cfg.notify_desktop and app.notify_setting == "Enabled":
+            self.notify_status.configure(text="✓ Windows will show them", foreground=pal["ok"])
+        else:
+            self.notify_status.configure(text="")
+
         here = app.together
         if here is not None:
             text, color = here.summary, ""
@@ -397,6 +430,18 @@ class SettingsTab:
         app.run_task("Trying out your mailbox…", lambda: check_sharing(app.cfg),
                      done=lambda msg: messagebox.showinfo("PaperBot", msg, parent=app.root))
 
+    # ---- notifications ------------------------------------------------------------------
+    def test_notification(self) -> None:
+        app = self.app
+        app.run_task(
+            "Sending a test notification…",
+            lambda: notify.show_toast("PaperBot notifications work", [
+                "This is how you'll hear that a paper needs you.",
+                "Click here to open PaperBot on \"Needs you\"."]),
+            failed=lambda exc: app.refresh_notify_setting(),
+            done=lambda _: (app.refresh_notify_setting(), app.set_status(
+                "Test notification sent - it appears at the corner of your screen.")))
+
     def save(self) -> None:
         cfg = self.app.cfg
         changes = {}
@@ -437,6 +482,8 @@ class SettingsTab:
             config_mod.set_value(section, key, value, cfg.path)
         self.app.reload_config()
         self.app.refresh_vpn_status()
+        if ("notify", "desktop") in changes:
+            self.app.refresh_notify_setting()
         self.saved_label.configure(text=f"Saved {len(changes)} change(s)." if changes
                                    else "Nothing changed.")
         if ("schedule", "poll_minutes") in changes and self.app.task and self.app.task.on:

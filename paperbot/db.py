@@ -61,10 +61,12 @@ CREATE TABLE IF NOT EXISTS computers(      -- the computers that share these rec
   seen TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS sync_meta(key TEXT PRIMARY KEY, value TEXT);   -- this computer only
+CREATE TABLE IF NOT EXISTS toasted(key TEXT PRIMARY KEY, at TEXT);        -- this computer only:
+                                           -- papers its Windows notifications have announced
 """
 
 # The records computers share when they work together (see sync.py): table -> its key.
-# sync_meta is deliberately not here.
+# sync_meta and toasted are deliberately not here.
 SHARED_TABLES = {"people": "email", "requests": "id", "items": "id", "seen": "message_id",
                  "downloads": "id", "alerts": "key", "computers": "node"}
 STATE_FORMAT = 1    # raise when a change means older versions can't use the shared records
@@ -320,6 +322,19 @@ class DB:
             return False
         self._x("INSERT OR REPLACE INTO alerts VALUES(?,?)", (key, now_iso()))
         return True
+
+    # ---- Windows notifications shown on this computer (see notify.py) -----
+    def claim_toast(self, key: str) -> bool:
+        """True for the first PaperBot process on this computer that asks about this paper:
+        the background check and the open app must not both announce it. (The app asks every
+        few seconds, so the usual "announced already" answer only reads.)"""
+        if self.conn.execute("SELECT 1 FROM toasted WHERE key=?", (key,)).fetchone():
+            return False
+        return self._x("INSERT OR IGNORE INTO toasted VALUES(?,?)", (key, now_iso())).rowcount == 1
+
+    def forget_old_toasts(self, days: int = 180) -> None:
+        cutoff = (datetime.now() - timedelta(days=days)).isoformat(timespec="seconds")
+        self._x("DELETE FROM toasted WHERE at < ?", (cutoff,))
 
     # ---- is there anything to do? ---------------------------------------
     def has_work(self) -> bool:

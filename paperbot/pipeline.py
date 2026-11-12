@@ -67,7 +67,7 @@ def describe(row) -> str:
 class Bot:
     def __init__(self, cfg: Config, db: DB, mail: MailClient, resolver: Resolver,
                  oa: OpenAccess, vpn: Vpn | None, publisher_factory, clock=datetime.now,
-                 sync=None):
+                 sync=None, notifier=None):
         self.cfg = cfg
         self.db = db
         self.mail = mail
@@ -80,6 +80,9 @@ class Bot:
         # the records or uses the VPN runs inside `with self.sync.session():`.
         self.sync = sync or NoSync()
         self.host = self.sync.name or computer_name()
+        # notifier(cfg, db) puts papers that newly need the owner on this computer's screen
+        # (notify.announce). None: say nothing - the tests, and anything without a desktop.
+        self.notifier = notifier
         self.wait_s = 120.0     # how long the owner's own actions wait for another computer
         self.pdf_dir = cfg.data_dir / "pdfs"
         self.pdf_dir.mkdir(parents=True, exist_ok=True)
@@ -90,16 +93,31 @@ class Bot:
     # =================================================================
     def run_once(self, wait_s: float = 0) -> None:
         """One check. wait_s: how long to wait if another computer is working right now."""
-        self.sync.refresh(wait_s)             # see what another computer did meanwhile
-        incoming = self.mail.fetch(self.cfg.lookback_days, self._wanted)
-        if any(not self.db.is_seen(i.message_id) for i in incoming) or self.db.has_work():
-            with self.sync.session(wait_s):
-                self.intake(incoming)
-                self.sync.checkpoint()        # the others now know what this one took on
-                self.process()
-                self.deliver()
-                self.notify_owner()
-        self.cleanup()
+        try:
+            self.sync.refresh(wait_s)         # see what another computer did meanwhile
+            incoming = self.mail.fetch(self.cfg.lookback_days, self._wanted)
+            if any(not self.db.is_seen(i.message_id) for i in incoming) or self.db.has_work():
+                with self.sync.session(wait_s):
+                    self.intake(incoming)
+                    self.sync.checkpoint()    # the others now know what this one took on
+                    self.process()
+                    self.deliver()
+                    self.notify_owner()
+            self.cleanup()
+        finally:
+            # Also when this check stepped aside or failed half-way: papers that need the
+            # owner may have come in from another computer, or just before the failure.
+            self.announce()
+
+    def announce(self) -> None:
+        """A Windows notification about papers that have newly come to need the owner. It is
+        a courtesy on top of the email, so it never gets in the way of a check."""
+        if self.notifier is None:
+            return
+        try:
+            self.notifier(self.cfg, self.db)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("couldn't show the Windows notification: %s", exc)
 
     @property
     def _here(self) -> str:
@@ -660,6 +678,7 @@ class Bot:
                 Path(p).unlink(missing_ok=True)
             except OSError:
                 pass
+        self.db.forget_old_toasts()
 
     def _greeting(self, name: str | None) -> str:
         first = (name or "").split()[0] if (name or "").split() else "there"

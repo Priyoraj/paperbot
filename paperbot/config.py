@@ -75,6 +75,8 @@ class Config:
     # enabled = this computer may share its records; nothing is shared until the owner starts it.
     sync_enabled: bool = True
     sync_folder: str = SYNC_FOLDER
+    # A Windows notification on this computer when a paper comes to need the owner (notify.py).
+    notify_desktop: bool = True
     path: Path | None = None
 
     # ---- derived -------------------------------------------------------
@@ -169,6 +171,7 @@ _MAP = {
     ("schedule", "poll_minutes"): "poll_minutes",
     ("sync", "enabled"): "sync_enabled",
     ("sync", "folder"): "sync_folder",
+    ("notify", "desktop"): "notify_desktop",
 }
 
 

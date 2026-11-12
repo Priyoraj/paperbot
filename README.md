@@ -46,6 +46,9 @@ email "Paper request"  ─►  new person?  ── yes ──►  you approve (i
   the requester is told it will come separately. One click there opens it in an ordinary,
   non-automated browser window, routed through your institutional access. You download the PDF
   and PaperBot emails it on.
+- **You hear about it straight away.** When a paper comes to need you, PaperBot emails you and
+  shows a Windows notification. Clicking the notification opens the app on *Needs you*. The
+  notification can be switched off in Settings.
 
 ## Daily safety limits (fair use)
 
@@ -97,7 +100,8 @@ Steps:
    - Pick your VPN connection, which uses the password Windows saved for it.
    - Press **Check everything**.
 4. **Home.** Turn on **Automatic mode**. PaperBot then checks mail 1 minute after you sign in to
-   Windows and every 10 minutes after that, even with its window closed.
+   Windows and every 10 minutes after that, even with its window closed. The switch below it
+   also opens the app itself, minimised to the taskbar, a minute after you sign in.
 5. **Share with colleagues** saves the request page to send them. It can also save an installer
    zip for colleagues who have institutional access of their own.
 

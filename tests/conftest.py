@@ -1,13 +1,28 @@
-"""Shared by all tests: the desktop app's window, opened on an empty PaperBot folder."""
+"""Shared by all tests: nothing reaches the real desktop, and the app's window for the tests
+that need one."""
 import time
 
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def toasts(monkeypatch):
+    """For every test: no real Windows notification pops up, Windows isn't asked anything and
+    nothing is written to the registry. What would have been shown is collected here:
+    [(headline, lines, page)]."""
+    from paperbot import notify
+    shown = []
+    monkeypatch.setattr(notify, "show_toast",
+                        lambda title, lines, page="needs": shown.append((title, lines, page)))
+    monkeypatch.setattr(notify, "register", lambda: None)
+    monkeypatch.setattr(notify, "windows_setting", lambda: "Enabled")
+    return shown
+
+
 @pytest.fixture
 def window(tmp_path, monkeypatch):
     """The app (paperbot.gui.window.App), hidden, with nothing that reaches outside: no
-    scheduled task, no VPN, no mailbox. Dialogs it would show are collected in app.said."""
+    scheduled tasks, no VPN, no mailbox. Dialogs it would show are collected in app.said."""
     tk = pytest.importorskip("tkinter")
     monkeypatch.setenv("PAPERBOT_HOME", str(tmp_path))
     (tmp_path / "config.toml").write_text('[owner]\nname = "Priya"\n[mail]\nusername = '
@@ -16,7 +31,7 @@ def window(tmp_path, monkeypatch):
     from paperbot.gui import settings as gui_settings
     from paperbot.gui import window as gui_main
     from paperbot.sync import NoSync
-    monkeypatch.setattr(gui_main.winsvc, "status", lambda: winsvc.TaskStatus(False))
+    monkeypatch.setattr(winsvc, "status", lambda task=winsvc.TASK: winsvc.TaskStatus(False))
     monkeypatch.setattr(gui_main, "vpn_signin_saved", lambda cfg: True)
     monkeypatch.setattr(gui_main, "make_sync", lambda cfg, db: NoSync())
     monkeypatch.setattr(gui_settings, "vpn_profiles", lambda: ["Institute VPN"])
@@ -34,9 +49,17 @@ def window(tmp_path, monkeypatch):
     if root is None:
         pytest.skip(f"no display ({problem})")
     root.withdraw()
+
+    def pump(until, seconds: float = 5.0) -> None:
+        """Let the window work (timers, results from background threads) until `until()`."""
+        deadline = time.monotonic() + seconds
+        while not until() and time.monotonic() < deadline:
+            root.update()
+            time.sleep(0.05)
+
     try:
         app = gui_main.App(root)
-        app.said = said
+        app.said, app.pump = said, pump
         yield app
     finally:
         root.destroy()

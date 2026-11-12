@@ -129,11 +129,13 @@ if "--light" in sys.argv:
 base.make_dpi_aware()
 import tkinter as tk  # noqa: E402
 
+from paperbot import notify  # noqa: E402
 from paperbot.gui import window as gui_window  # noqa: E402
 from paperbot.gui.window import App  # noqa: E402
 from paperbot.sync import NoSync  # noqa: E402
 
 gui_window.make_sync = lambda cfg, db: NoSync()   # the demo never looks at a real mailbox
+notify.show_toast = lambda *a, **kw: None         # ...and its demo papers pop up no notification
 
 root = tk.Tk()
 app = App(root)
@@ -181,7 +183,7 @@ def show(i: int) -> None:
         tab.load_values()
         app.refresh_all()
         root.update()
-        top = tab.together_status.winfo_y() - app.px(150)
+        top = tab.together_status.winfo_y() - app.px(270)      # with "Notifications" above it
         tab.scroll.canvas.yview_moveto(max(0, top) / max(1, tab.scroll.body.winfo_height()))
         root.after(1800, lambda: shoot(i))
         return

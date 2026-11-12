@@ -99,6 +99,23 @@ class HomeTab:
                                    command=self.toggle_auto)
         self.auto_btn.pack(side="right")
 
+        # -- the app itself, opened when Windows starts
+        start = ttk.Frame(self.frame)
+        start.pack(fill="x", pady=(px(10), 0))
+        self.start_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(start, style="Switch.TCheckbutton", variable=self.start_var,
+                        text="Open PaperBot in the taskbar a minute after I sign in to Windows",
+                        command=self.toggle_app_start).pack(side="left")
+        ttk.Label(start, text="so it is at hand when a paper needs you",
+                  foreground=pal["muted"]).pack(side="left", padx=px(12))
+
+        # -- notifications are wanted, but Windows is set to show none (shown only then)
+        notify_row = ttk.Frame(self.frame)
+        notify_row.pack(fill="x")
+        self.notify_text = ttk.Label(notify_row, text="", justify="left", wraplength=px(1040),
+                                     foreground=pal["warn"], cursor="hand2")
+        self.notify_text.bind("<Button-1>", lambda e: app.open_windows_notification_settings())
+
         # -- working together with PaperBot on another computer (shown once that is on)
         self.together_row = ttk.Frame(self.frame)
         self.together_row.pack(fill="x")
@@ -180,6 +197,17 @@ class HomeTab:
                      "sign in to Windows.")
             self.auto_btn.configure(text="Turn on", style="Accent.TButton")
 
+        if app.app_start is not None:          # None: not known yet, or being changed
+            self.start_var.set(app.app_start.on)
+
+        blocked = app.notifications_blocked
+        if blocked:
+            self.notify_text.configure(text="PaperBot can't show you a notification when a paper "
+                                            f"needs you: {blocked} Click here to open that page.")
+            self.notify_text.pack(anchor="w", pady=(app.px(10), 0))
+        else:
+            self.notify_text.pack_forget()
+
         here = app.together
         if app.sync_problem:
             note, color = "Working together has stopped: " + app.sync_problem, pal["bad"]
@@ -232,6 +260,19 @@ class HomeTab:
                          lambda: winsvc.install(app.cfg.poll_minutes),
                          done=lambda _: (app.refresh_task_status(),
                                          app.set_status("Automatic mode is on.")))
+
+    def toggle_app_start(self) -> None:
+        """The switch under Automatic mode: open the app after Windows sign-in, or not."""
+        app, want = self.app, bool(self.start_var.get())
+        app.app_start = None                   # keep the switch where it was put meanwhile
+        app.run_task(
+            "Setting PaperBot to open after you sign in…" if want
+            else "Taking PaperBot out of what opens after you sign in…",
+            winsvc.install_app_start if want else winsvc.uninstall_app_start,
+            failed=lambda exc: app.refresh_app_start(),
+            done=lambda _: (app.refresh_app_start(), app.set_status(
+                "PaperBot will open in the taskbar a minute after you sign in to Windows."
+                if want else "PaperBot no longer opens by itself after you sign in.")))
 
     def check_now(self) -> None:
         def work():

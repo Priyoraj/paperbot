@@ -15,6 +15,7 @@ from tkinter import ttk
 
 from ..app import Busy, LockLost, SyncError
 from ..config import ConfigError
+from ..notify import NotificationsOff
 
 PALETTES = {
     "light": {"ok": "#0f7b0f", "bad": "#c42b1c", "warn": "#9d5d00", "muted": "#5f5f5f",
@@ -30,6 +31,41 @@ def make_dpi_aware() -> None:
             ctypes.windll.shcore.SetProcessDpiAwareness(1)
         except (AttributeError, OSError):
             pass
+
+
+def work_area(root: tk.Tk) -> tuple[int, int, int, int]:
+    """(left, top, width, height) of the screen without the taskbar, in pixels."""
+    if sys.platform == "win32":
+        try:
+            from ctypes import wintypes
+            rect = wintypes.RECT()
+            if ctypes.windll.user32.SystemParametersInfoW(48, 0, ctypes.byref(rect), 0):
+                return rect.left, rect.top, rect.right - rect.left, rect.bottom - rect.top
+        except (AttributeError, OSError):
+            pass
+    return 0, 0, root.winfo_screenwidth(), root.winfo_screenheight()
+
+
+def fitted(width: int, height: int, min_width: int, min_height: int,
+           area: tuple[int, int, int, int], title_bar: int) -> tuple[int, int, int, int, int, int]:
+    """(width, height, x, y, min_width, min_height) for a window that would like width x
+    height on a screen whose usable part is `area` (left, top, width, height): as wanted, but
+    never larger than there is room for, and centred. On a small or heavily scaled display
+    the window's lower edge would otherwise end up behind the taskbar."""
+    left, top, room_w, room_h = area
+    width = max(320, min(width, room_w - 16))
+    height = max(240, min(height, room_h - title_bar - 8))
+    return (width, height, left + max(0, (room_w - width) // 2),
+            top + max(0, (room_h - height - title_bar) // 2),
+            min(min_width, width), min(min_height, height))
+
+
+def fit_window(root: tk.Tk, width: int, height: int, min_width: int, min_height: int) -> None:
+    title_bar = int(48 * root.winfo_fpixels("1i") / 96)      # the frame Windows adds on top
+    w, h, x, y, min_w, min_h = fitted(width, height, min_width, min_height, work_area(root),
+                                      title_bar)
+    root.minsize(min_w, min_h)                               # first: it limits the size
+    root.geometry(f"{w}x{h}+{x}+{y}")
 
 
 def windows_prefers_dark() -> bool:
@@ -85,7 +121,7 @@ def friendly(exc: BaseException) -> str:
     from ..vpn import VpnError
     if isinstance(exc, ConfigError):
         return f"Please finish setup first: {exc}"
-    if isinstance(exc, Busy):
+    if isinstance(exc, (Busy, NotificationsOff)):
         return str(exc)
     if isinstance(exc, LockLost):
         return ("PaperBot stopped before it finished: this computer was asleep or offline for "

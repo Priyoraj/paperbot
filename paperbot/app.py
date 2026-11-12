@@ -98,6 +98,7 @@ def single_instance(cfg: Config, wait_s: float = 0):
 
 # ---- building the bot -------------------------------------------------------------
 def build_bot(cfg: Config, need_mail: bool = True):
+    from . import notify
     from .db import DB
     from .mail import ImapSmtpMail
     from .pipeline import Bot
@@ -113,7 +114,7 @@ def build_bot(cfg: Config, need_mail: bool = True):
                OpenAccess(session, cfg.contact_email, max_pdf), make_vpn(cfg),
                lambda: PublisherFetcher(cfg.browser, cfg.headless, max_pdf,
                                         cfg.download_spacing_s),
-               sync=make_sync(cfg, db, password))
+               sync=make_sync(cfg, db, password), notifier=notify.announce)
 
 
 # ---- working together with PaperBot on other computers (sync.py) -------------------

@@ -82,3 +82,18 @@ def test_app_window_opens_and_every_screen_refreshes(window):      # fixture: co
         app.root.update()
     assert app.cfg.owner_name == "Priya"
     assert "Automatic mode" in app.mode_label.cget("text")
+
+
+def test_the_window_never_wants_more_room_than_the_screen_has():
+    from paperbot.gui.base import fitted
+    # A 1920x1080 screen at 150% scaling, taskbar taken off: the app's usual size (1680x1110
+    # at that scaling) is taller than the screen, and its lower edge sat behind the taskbar.
+    w, h, x, y, min_w, min_h = fitted(1680, 1110, 1440, 960, (0, 0, 1920, 1008), title_bar=72)
+    assert (w, h) == (1680, 928) and y + 72 + h <= 1008          # title bar + window: in view
+    assert x == 120 and (min_w, min_h) == (1440, 928)            # centred; can't be forced taller
+    # Room to spare: exactly as asked for, in the middle (the taskbar may be on the left).
+    assert fitted(800, 500, 600, 400, (60, 0, 1860, 1008), title_bar=48) == (
+        800, 500, 60 + 530, 230, 600, 400)
+    # A tiny screen: still a usable window, never a negative size.
+    w, h, x, y, _, _ = fitted(1680, 1110, 1440, 960, (0, 0, 300, 200), title_bar=48)
+    assert (w, h) == (320, 240) and x == 0 and y == 0
