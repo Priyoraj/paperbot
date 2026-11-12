@@ -19,10 +19,16 @@ def echo_server():
     return srv.getsockname()[1]
 
 
-def ask(proxy_port, raw: bytes, then: bytes | None = None) -> bytes:
+def ask(proxy_port, raw: bytes, then: bytes | None = None, until: bytes = b"") -> bytes:
+    """`until`: keep reading until the reply ends with this - it can arrive in pieces."""
     s = socket.create_connection(("127.0.0.1", proxy_port), timeout=5)
     s.sendall(raw)
     reply = s.recv(4096)
+    while until and not reply.endswith(until):
+        more = s.recv(4096)
+        if not more:
+            break
+        reply += more
     if then is not None:
         s.sendall(then)
         reply += b"|" + s.recv(4096)
@@ -70,7 +76,7 @@ def test_plain_http_is_forwarded_in_origin_form():
     port = srv.server_address[1]
     with IPv4Proxy(resolver=lambda h, p: [("127.0.0.1", port)], allow_private=True) as proxy:
         reply = ask(proxy.port, b"GET http://site.example/a?b=1 HTTP/1.1\r\nHost: site.example\r\n"
-                                b"Proxy-Connection: keep-alive\r\n\r\n")
+                                b"Proxy-Connection: keep-alive\r\n\r\n", until=b"ok")
     srv.server_close()
     assert reply.startswith(b"HTTP/1.0 200") and reply.endswith(b"ok")
     assert seen == {"path": "/a?b=1", "host": "site.example"}
