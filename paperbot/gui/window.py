@@ -22,6 +22,19 @@ SHARED_EVERY_MS = 5 * 60 * 1000    # how often to pick up what another computer 
 LISTEN_EVERY_MS = 400              # how often to check whether a second start wants us forward
 
 
+def set_icon(root: tk.Tk) -> None:
+    """The window's own icon. PaperBot works without it, so trouble with the picture is only
+    noted - it must never keep the app from opening."""
+    icon = ASSETS / "paperbot.png"
+    if not icon.exists():
+        return
+    try:
+        root.paperbot_icon = tk.PhotoImage(master=root, file=str(icon))   # kept: Tk needs it
+        root.iconphoto(True, root.paperbot_icon)
+    except tk.TclError as exc:
+        log.warning("couldn't set the window's icon: %s", exc)
+
+
 class App:
     def __init__(self, root: tk.Tk, instance: Instance | None = None):
         self.root = root
@@ -45,10 +58,7 @@ class App:
         self._picking_up = False
         root.title("PaperBot")
         fit_window(root, self.px(1120), self.px(740), self.px(960), self.px(640))
-        icon = ASSETS / "paperbot.png"
-        if icon.exists():
-            self._icon = tk.PhotoImage(file=str(icon))
-            root.iconphoto(True, self._icon)
+        set_icon(root)
         self._build()
         self.refresh_all()
         self.refresh_task_status()

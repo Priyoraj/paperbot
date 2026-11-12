@@ -84,6 +84,17 @@ def test_app_window_opens_and_every_screen_refreshes(window):      # fixture: co
     assert "Automatic mode" in app.mode_label.cget("text")
 
 
+def test_the_app_opens_even_when_its_icon_cannot_be_shown(window, monkeypatch, caplog):
+    from paperbot.gui import window as gui_main
+
+    def no_picture(**kw):
+        raise gui_main.tk.TclError("couldn't read the picture")
+
+    monkeypatch.setattr(gui_main.tk, "PhotoImage", no_picture)
+    gui_main.set_icon(window.root)                       # nothing raised: the app goes on
+    assert "couldn't set the window's icon" in caplog.text
+
+
 def test_the_window_never_wants_more_room_than_the_screen_has():
     from paperbot.gui.base import fitted
     # A 1920x1080 screen at 150% scaling, taskbar taken off: the app's usual size (1680x1110

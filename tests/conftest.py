@@ -38,17 +38,24 @@ def window(tmp_path, monkeypatch):
     said = []
     monkeypatch.setattr(gui_main.messagebox, "showinfo",
                         lambda title, text, **kw: said.append(text))
-    root, problem = None, None
-    for _ in range(4):          # on Windows a new Tk now and then fails to start: try again
-        try:
+    root = app = problem = None
+    for _ in range(4):          # on Windows a new Tk now and then fails to start, or to build
+        try:                    # its first widgets, when many came and went before: try again
             root = tk.Tk()
+            root.withdraw()
+            app = gui_main.App(root)
             break
         except tk.TclError as exc:
             problem = exc
+            if root is not None:
+                try:
+                    root.destroy()
+                except tk.TclError:
+                    pass
+            root = app = None
             time.sleep(0.5)
-    if root is None:
+    if app is None:
         pytest.skip(f"no display ({problem})")
-    root.withdraw()
 
     def pump(until, seconds: float = 5.0) -> None:
         """Let the window work (timers, results from background threads) until `until()`."""
@@ -57,9 +64,8 @@ def window(tmp_path, monkeypatch):
             root.update()
             time.sleep(0.05)
 
+    app.said, app.pump = said, pump
     try:
-        app = gui_main.App(root)
-        app.said, app.pump = said, pump
         yield app
     finally:
         root.destroy()
