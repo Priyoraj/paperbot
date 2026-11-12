@@ -1,6 +1,7 @@
 """People (approvals, trust settings) and Requests (history with per-paper details)."""
 from __future__ import annotations
 
+import re
 import tkinter as tk
 from datetime import datetime
 from tkinter import messagebox, ttk
@@ -26,6 +27,41 @@ def when(iso: str | None) -> str:
         t.strftime("%H:%M")
 
 
+ADDRESS = re.compile(r"[^@\s<>()\[\],;:\"]+@[^@\s<>()\[\],;:\"]+\.[^@\s<>()\[\],;:\".]+")
+
+
+def read_addresses(text: str) -> tuple[list[tuple[str, str]], list[str]]:
+    """What someone typed or pasted into an address box -> ([(name, email)], [the parts that
+    aren't an address]). Takes `a@b.org`, `Asha Rao <a@b.org>`, `Rao, Asha <a@b.org>` and
+    several of them, separated by commas, semicolons or new lines. Emails come back in lower
+    case, each once."""
+    people, odd, seen, words = [], [], set(), []
+    for piece in re.split(r"[,;\n]+", text or ""):
+        piece = piece.strip()
+        if not piece:
+            continue
+        found = ADDRESS.findall(piece)
+        if not found:
+            # "ravi@college": meant as an address but isn't one. Anything else may be the
+            # first half of a name written with a comma; the address then follows.
+            (odd if "@" in piece else words).append(piece)
+            continue
+        if not (len(found) == 1 and "<" in piece):
+            odd.extend(words)             # only `Name <address>` can have a name before it
+            words = []
+        name = ""
+        if len(found) == 1:
+            name = ", ".join(words + [piece.replace(found[0], " ")])
+            name = " ".join(re.sub(r"mailto:|[<>\"()\[\]]", " ", name, flags=re.I).split())
+            name = name.strip(", ")
+        words = []
+        for email in found:
+            if email.lower() not in seen:
+                seen.add(email.lower())
+                people.append((name, email.lower()))
+    return people, odd + words            # words with no address after them
+
+
 class PeopleTab:
     key, title, always_refresh = "people", "People", False
 
@@ -45,22 +81,33 @@ class PeopleTab:
                        "it - here, or by replying \"yes\" to the email PaperBot sends you. When "
                        "off, anyone who emails a request gets the papers.").grid(
             row=1, column=0, columnspan=3, sticky="w", pady=(px(4), px(10)))
-        trust = ttk.Frame(card)
-        trust.grid(row=2, column=0, columnspan=3, sticky="w")
-        ttk.Label(trust, text="Always trust addresses at").pack(side="left")
-        self.domains = ttk.Entry(trust, width=36)
-        self.domains.pack(side="left", padx=px(10))
+        rules = ttk.Frame(card)           # two rows of: what - box - button - hint
+        rules.grid(row=2, column=0, columnspan=3, sticky="w")
+        ttk.Label(rules, text="Always trust addresses at").grid(row=0, column=0, sticky="w")
+        self.domains = ttk.Entry(rules, width=36)
+        self.domains.grid(row=0, column=1, padx=px(10))
         self.domains.bind("<Return>", lambda e: self.save_domains())
-        ttk.Button(trust, text="Save", command=self.save_domains).pack(side="left")
-        ttk.Label(trust, text="e.g.  university.edu  (several: separate with commas)",
-                  foreground=pal["muted"]).pack(side="left", padx=px(12))
+        ttk.Button(rules, text="Save", command=self.save_domains).grid(row=0, column=2,
+                                                                       sticky="ew")
+        ttk.Label(rules, text="e.g.  university.edu  (several: separate with commas)",
+                  foreground=pal["muted"]).grid(row=0, column=3, sticky="w", padx=px(12))
+        ttk.Label(rules, text="Never send papers to").grid(row=1, column=0, sticky="w",
+                                                           pady=(px(8), 0))
+        self.block_entry = ttk.Entry(rules, width=36)
+        self.block_entry.grid(row=1, column=1, padx=px(10), pady=(px(8), 0))
+        self.block_entry.bind("<Return>", lambda e: self.block_address())
+        ttk.Button(rules, text="Block", command=self.block_address).grid(
+            row=1, column=2, sticky="ew", pady=(px(8), 0))
+        ttk.Label(rules, text="an email address - also of someone who hasn't written yet",
+                  foreground=pal["muted"]).grid(row=1, column=3, sticky="w", padx=px(12),
+                                                pady=(px(8), 0))
 
-        ttk.Label(self.frame, text="People who have asked for papers", font=f(STRONG)).pack(
-            anchor="w", pady=(px(16), px(6)))
+        ttk.Label(self.frame, text="People who have asked for papers, and addresses you blocked",
+                  font=f(STRONG)).pack(anchor="w", pady=(px(16), px(6)))
         box, self.tree = make_tree(self.frame, [("email", "Email", 280, True),
                                                 ("name", "Name", 200, True),
                                                 ("status", "Status", 190, False),
-                                                ("since", "First request", 150, False)])
+                                                ("since", "Since", 150, False)])
         box.pack(fill="both", expand=True)
         row = ttk.Frame(self.frame)
         row.pack(fill="x", pady=(px(10), 0))
@@ -68,7 +115,8 @@ class PeopleTab:
             side="left")
         ttk.Button(row, text="Block", command=self.block).pack(side="left", padx=px(8))
         ttk.Button(row, text="Forget", command=self.forget).pack(side="left")
-        ttk.Label(row, text="Approving answers their waiting requests straight away.",
+        ttk.Label(row, text="Approving answers their waiting requests straight away. To lift a "
+                            "block, press Approve or Forget.",
                   foreground=pal["muted"]).pack(side="left", padx=px(14))
         self._sig = None
 
@@ -138,6 +186,43 @@ class PeopleTab:
                 "from now on.", parent=self.app.root):
             self.app.run_task("Blocking…", lambda: [self.app.bot().decide(e, approve=False)
                                                     for e in emails], lock=True)
+
+    def block_address(self) -> None:
+        """Block the addresses typed into "Never send papers to": people on the list, or
+        people who haven't written (yet) - their first request is then ignored too."""
+        app = self.app
+        people, odd = read_addresses(self.block_entry.get())
+        if odd:
+            messagebox.showinfo("PaperBot", "This doesn't look like an email address: "
+                                + ", ".join(odd), parent=app.root)
+            return
+        if not people:
+            messagebox.showinfo("PaperBot", "Type the email address to block first.",
+                                parent=app.root)
+            return
+        own = {app.cfg.owner_address, (app.cfg.mail_username or "").strip().lower()}
+        mine = [email for _, email in people if email in own]
+        if mine:
+            messagebox.showinfo("PaperBot", f"{mine[0]} is your own address. PaperBot always "
+                                            "answers you.", parent=app.root)
+            return
+        emails = [email for _, email in people]
+        if not messagebox.askyesno(
+                "PaperBot", "Block " + ", ".join(emails) + "?\nTheir requests will be ignored "
+                "from now on.", parent=app.root):
+            return
+
+        def work():                       # through the bot: other computers must hear of it
+            bot = app.bot()
+            for name, email in people:
+                bot.decide(email, approve=False, name=name)
+
+        def done(_):
+            self.block_entry.delete(0, "end")
+            app.set_status("Blocked: " + ", ".join(emails) + ". Their requests are ignored.")
+
+        self._sig = None
+        app.run_task("Blocking…", work, lock=True, done=done)
 
     def forget(self) -> None:
         emails = self._selected()

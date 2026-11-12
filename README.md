@@ -41,6 +41,9 @@ email "Paper request"  ─►  new person?  ── yes ──►  you approve (i
 - **First-time requesters** wait for your OK: press *Approve* in the app, or reply "yes" to the
   email PaperBot sends you. Approval can be switched off, and whole email domains can be
   trusted.
+- **Blocking.** Reply "no" to that email, or press *Block* on the People page, and PaperBot
+  ignores that person's requests from then on. An address can also be blocked before it has
+  ever written: type it under *Never send papers to*. *Approve* or *Forget* lifts a block.
 - **Papers that need a person.** Some publishers block automated browsers or show "verify you
   are human" checks. PaperBot never tries to get around them. The paper goes to *Needs you* and
   the requester is told it will come separately. One click there opens it in an ordinary,

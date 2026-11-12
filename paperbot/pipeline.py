@@ -253,10 +253,14 @@ class Bot:
                        f"Your reply about {person['email']} started with {first[:60]!r}.\n"
                        "Please reply to the original approval email with just 'yes' or 'no'.\n")
 
-    def decide(self, email: str, approve: bool, notify: bool = False) -> int:
-        """Approve/deny a person and release their held requests. Returns #requests released."""
-        email = email.lower()
+    def decide(self, email: str, approve: bool, notify: bool = False, name: str = "") -> int:
+        """Approve/deny a person and release their held requests. Returns #requests released.
+        The person needn't have written yet: blocking an address beforehand means its first
+        request is ignored like any later one (`name`: what to call them in the list)."""
+        email = email.strip().lower()
         with self.sync.session(self.wait_s):
+            if name and not self.db.person(email):
+                self.db.add_person(email, name, "approved" if approve else "denied")
             self.db.set_person_status(email, "approved" if approve else "denied")
             released = self.db.release_held(email, "queued" if approve else "denied")
             if not approve and self.cfg.reply_to_denied:
