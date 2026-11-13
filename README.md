@@ -108,6 +108,10 @@ Steps:
 5. **Share with colleagues** saves the request page to send them. It can also save an installer
    zip for colleagues who have institutional access of their own.
 
+The top of **Settings** has *Appearance*: a slider for the text size (80% to 150%; text follows
+your display's scaling to begin with) and six themes: same as Windows, light, dark, paper,
+midnight and high contrast. Both take effect at once.
+
 ## Using PaperBot on two computers
 
 You can run PaperBot on more than one computer for the same mailbox, say an office PC and a

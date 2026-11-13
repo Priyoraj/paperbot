@@ -78,3 +78,10 @@ folder = "PaperBot-sync"  # the mailbox folder (a Gmail label) that holds the sh
 # hand, or a file too large to email). Clicking it opens PaperBot on "Needs you". The email
 # "[PaperBot] N paper(s) need you" is sent either way.
 desktop = true
+
+[look]
+# How the app looks on this computer. Both can be changed in Settings > Appearance.
+# theme: "system" (light or dark, as Windows is set), "light", "dark", "paper", "midnight"
+# or "contrast" (high contrast).
+theme = "system"
+text_size = 100           # percent of the normal text size: 80 to 150

@@ -101,10 +101,13 @@ def test_the_window_never_wants_more_room_than_the_screen_has():
     # at that scaling) is taller than the screen, and its lower edge sat behind the taskbar.
     w, h, x, y, min_w, min_h = fitted(1680, 1110, 1440, 960, (0, 0, 1920, 1008), title_bar=72)
     assert (w, h) == (1680, 928) and y + 72 + h <= 1008          # title bar + window: in view
-    assert x == 120 and (min_w, min_h) == (1440, 928)            # centred; can't be forced taller
+    assert x == 108 and (min_w, min_h) == (1440, 928)            # centred; can't be forced taller
     # Room to spare: exactly as asked for, in the middle (the taskbar may be on the left).
     assert fitted(800, 500, 600, 400, (60, 0, 1860, 1008), title_bar=48) == (
-        800, 500, 60 + 530, 230, 600, 400)
+        800, 500, 60 + 522, 230, 600, 400)
     # A tiny screen: still a usable window, never a negative size.
     w, h, x, y, _, _ = fitted(1680, 1110, 1440, 960, (0, 0, 300, 200), title_bar=48)
     assert (w, h) == (320, 240) and x == 0 and y == 0
+    # Larger text asks for a wider window than the screen: its edges stay on the screen too.
+    w, h, x, y, _, _ = fitted(2520, 1665, 1440, 960, (0, 0, 1920, 1080), title_bar=72)
+    assert x >= 0 and x + w + 24 <= 1920 and y + 72 + h <= 1080

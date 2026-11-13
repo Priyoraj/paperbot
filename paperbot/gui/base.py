@@ -16,13 +16,7 @@ from tkinter import ttk
 from ..app import Busy, LockLost, SyncError
 from ..config import ConfigError
 from ..notify import NotificationsOff
-
-PALETTES = {
-    "light": {"ok": "#0f7b0f", "bad": "#c42b1c", "warn": "#9d5d00", "muted": "#5f5f5f",
-              "accent": "#005fb8"},
-    "dark": {"ok": "#6ccb5f", "bad": "#ff99a4", "warn": "#fce100", "muted": "#a0a0a0",
-             "accent": "#60cdff"},
-}
+from .look import text_scale
 
 
 def make_dpi_aware() -> None:
@@ -53,9 +47,10 @@ def fitted(width: int, height: int, min_width: int, min_height: int,
     never larger than there is room for, and centred. On a small or heavily scaled display
     the window's lower edge would otherwise end up behind the taskbar."""
     left, top, room_w, room_h = area
-    width = max(320, min(width, room_w - 16))
+    frame = title_bar // 3                 # the edges Windows adds left and right, together
+    width = max(320, min(width, room_w - frame))
     height = max(240, min(height, room_h - title_bar - 8))
-    return (width, height, left + max(0, (room_w - width) // 2),
+    return (width, height, left + max(0, (room_w - width - frame) // 2),
             top + max(0, (room_h - height - title_bar) // 2),
             min(min_width, width), min(min_height, height))
 
@@ -68,35 +63,9 @@ def fit_window(root: tk.Tk, width: int, height: int, min_width: int, min_height:
     root.geometry(f"{w}x{h}+{x}+{y}")
 
 
-def windows_prefers_dark() -> bool:
-    if sys.platform != "win32":
-        return False
-    try:
-        import winreg
-        with winreg.OpenKey(winreg.HKEY_CURRENT_USER,
-                            r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize") as k:
-            return winreg.QueryValueEx(k, "AppsUseLightTheme")[0] == 0
-    except OSError:
-        return False
-
-
-def apply_theme(root: tk.Tk) -> dict:
-    mode = "dark" if windows_prefers_dark() else "light"
-    try:
-        import sv_ttk
-        sv_ttk.set_theme(mode)
-    except Exception:  # noqa: BLE001 - fall back to the stock theme
-        ttk.Style(root).theme_use("vista" if sys.platform == "win32" else "clam")
-    style = ttk.Style(root)
-    line = tkfont.nametofont("TkDefaultFont").metrics("linespace")
-    style.configure("Treeview", rowheight=line + 12)
-    pal = dict(PALETTES[mode])
-    pal["mode"] = mode
-    return pal
-
-
 def font(name: str, fallback_size: int, bold: bool = False):
-    """Sun Valley named fonts when the theme provides them, Segoe UI otherwise."""
+    """The named fonts of look.py (the text-size setting changes those, and with them every
+    widget at once); Segoe UI if one is somehow missing."""
     try:
         tkfont.nametofont(name)
         return name
@@ -176,22 +145,35 @@ class Bg:
         self.root.after(100, self._poll)
 
 
-class ScrollFrame(ttk.Frame):
-    """A vertically scrolling container; put widgets in .body."""
+def page_height(wanted: int, room: int, fill: bool) -> tuple[int, bool]:
+    """(how tall a ScrollFrame's content is made, whether its scrollbar shows) when the
+    content asks for `wanted` pixels and `room` are in view. fill: content that fits is
+    stretched over the whole room, so that a list in it can use what is spare."""
+    return (max(wanted, room) if fill else wanted), wanted > room
 
-    def __init__(self, parent, **kw):
+
+class ScrollFrame(ttk.Frame):
+    """A vertically scrolling container; put widgets in .body.
+
+    fill=True makes a page that behaves like an ordinary one while everything fits (the
+    content takes the whole room, no scrollbar) and scrolls once it doesn't - large text on a
+    small screen. The scrollbar's place is kept free either way, so showing it never changes
+    the width the content is laid out in."""
+
+    def __init__(self, parent, fill: bool = False, **kw):
         super().__init__(parent, **kw)
+        self.fill = fill
         self.canvas = tk.Canvas(self, highlightthickness=0, bd=0)
         self.bar = ttk.Scrollbar(self, orient="vertical", command=self.canvas.yview)
         self.body = ttk.Frame(self.canvas)
-        self.body.bind("<Configure>",
-                       lambda e: self.canvas.configure(scrollregion=self.canvas.bbox("all")))
         self._win = self.canvas.create_window((0, 0), window=self.body, anchor="nw")
-        self.canvas.bind("<Configure>",
-                         lambda e: self.canvas.itemconfigure(self._win, width=e.width))
         self.canvas.configure(yscrollcommand=self.bar.set)
-        self.canvas.pack(side="left", fill="both", expand=True)
-        self.bar.pack(side="right", fill="y")
+        self.canvas.grid(row=0, column=0, sticky="nsew")
+        self.bar.grid(row=0, column=1, sticky="ns")
+        self.rowconfigure(0, weight=1)
+        self.columnconfigure(0, weight=1)
+        self.body.bind("<Configure>", lambda e: self._fit())
+        self.canvas.bind("<Configure>", lambda e: self._fit())
         self.canvas.bind("<Enter>", lambda e: self.canvas.bind_all("<MouseWheel>", self._wheel))
         self.canvas.bind("<Leave>", lambda e: self.canvas.unbind_all("<MouseWheel>"))
         style = ttk.Style(self)
@@ -199,18 +181,75 @@ class ScrollFrame(ttk.Frame):
         if bg:
             self.canvas.configure(background=bg)
 
+    def _fit(self) -> None:
+        width, room = self.canvas.winfo_width(), self.canvas.winfo_height()
+        height, scrolls = page_height(self.body.winfo_reqheight(), room, self.fill)
+        self.columnconfigure(1, minsize=self.bar.winfo_reqwidth())
+        self.canvas.itemconfigure(self._win, width=width, height=height)
+        self.canvas.configure(scrollregion=(0, 0, width, height))
+        if scrolls or not self.fill:
+            self.bar.grid()
+        else:
+            self.bar.grid_remove()
+            self.canvas.yview_moveto(0)
+
     def _wheel(self, event) -> None:
-        self.canvas.yview_scroll(int(-event.delta / 120), "units")
+        widget = event.widget
+        if not isinstance(widget, str) and widget.winfo_class() in ("Treeview", "Text",
+                                                                     "Listbox"):
+            return                         # a list or text area under the mouse scrolls itself
+        first, last = self.canvas.yview()
+        if first > 0 or last < 1:          # only when something is out of view
+            self.canvas.yview_scroll(int(-event.delta / 120), "units")
 
 
-def make_tree(parent, columns: list[tuple[str, str, int, bool]], height: int = 10):
-    """columns: (id, heading, width, stretch). Returns (frame, tree)."""
+def scroll_page(parent, padding) -> tuple[ScrollFrame, ttk.Frame]:
+    """A page for the notebook that scrolls when its content doesn't fit.
+    Returns (the page, the frame to put its content in)."""
+    page = ScrollFrame(parent, fill=True)
+    inside = ttk.Frame(page.body, padding=padding)
+    inside.pack(fill="both", expand=True)
+    return page, inside
+
+
+def wrap_to_width(label, least: int = 160, most: int | None = None) -> None:
+    """Let a label wrap its text to the width it is given, instead of running out of the
+    window. For a label that is given the room left in its row or grid cell: packed with
+    fill="x" (and expand=True beside other things), or gridded sticky="ew" in a column that
+    stretches. `most`: lines no longer than this, however wide the window is."""
+    def fit(event) -> None:
+        width = max(least, event.width if most is None else min(event.width, most))
+        if abs(width - int(str(label.cget("wraplength")) or 0)) > 2:
+            label.configure(wraplength=width)
+    label.bind("<Configure>", fit)
+
+
+def make_tree(parent, columns: list[tuple[str, str, int, bool]], height: int = 5):
+    """columns: (id, heading, width, stretch); widths are for normal text on an unscaled
+    display and grow with both. `height`: the fewest rows to show - lists are packed to take
+    the room that is spare. Returns (frame, tree)."""
     frame = ttk.Frame(parent)
+    grow = text_scale(parent)
     tree = ttk.Treeview(frame, columns=[c[0] for c in columns], show="headings",
                         height=height, selectmode="extended")
+    least = int(40 * grow)
     for cid, heading, width, stretch in columns:
         tree.heading(cid, text=heading, anchor="w")
-        tree.column(cid, width=width, stretch=stretch, anchor="w")
+        tree.column(cid, width=int(width * grow), minwidth=least, stretch=stretch, anchor="w")
+
+    def share_out(event) -> None:
+        """Give the columns that may stretch the width that is there, in proportion: more
+        when there is room to spare, less when the text is large and the list is not as
+        wide as its columns would like (it would otherwise cut the last one off)."""
+        fixed = sum(int(w * grow) for _, _, w, stretch in columns if not stretch)
+        flexible = sum(w for _, _, w, stretch in columns if stretch)
+        room = event.width - fixed - 4
+        if flexible and room > 0:
+            for cid, _, width, stretch in columns:
+                if stretch:
+                    tree.column(cid, width=max(least, int(room * width / flexible)))
+
+    tree.bind("<Configure>", share_out)
     bar = ttk.Scrollbar(frame, orient="vertical", command=tree.yview)
     tree.configure(yscrollcommand=bar.set)
     tree.pack(side="left", fill="both", expand=True)

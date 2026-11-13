@@ -9,8 +9,8 @@ from tkinter import filedialog, messagebox, ttk
 
 from ..app import fetch_one, manual_session_factory
 from ..sync import computer_name, tidy_name
-from .base import BODY, STRONG, clip, f, fill_tree, make_tree
-from .home import text_colors
+from .base import BODY, STRONG, clip, f, fill_tree, make_tree, scroll_page, wrap_to_width
+from .home import outline, text_colors
 
 
 def over_limit_ok(app, n: int) -> bool:
@@ -32,20 +32,22 @@ class NeedsYouTab:
     def __init__(self, app, nb):
         self.app = app
         px, pal = app.px, app.pal
-        self.frame = ttk.Frame(nb, padding=px(18))
-        ttk.Label(self.frame, wraplength=px(980), justify="left", foreground=pal["muted"],
-                  text="These papers couldn't be fetched automatically - usually because the "
-                       "publisher blocks automated downloads. The requester has been told you'll "
-                       "send them. Pick one and let PaperBot open it in a browser window "
-                       "(it switches the VPN on and off for you).").pack(anchor="w")
-        box, self.tree = make_tree(self.frame, [("id", "#", 60, False),
-                                                ("paper", "Paper", 420, True),
-                                                ("for", "For", 230, True),
-                                                ("why", "Why", 260, True)], height=11)
+        self.frame, page = scroll_page(nb, px(18))
+        about = ttk.Label(page, justify="left", foreground=pal["muted"],
+                          text="These papers couldn't be fetched automatically - usually because "
+                               "the publisher blocks automated downloads. The requester has been "
+                               "told you'll send them. Pick one and let PaperBot open it in a "
+                               "browser window (it switches the VPN on and off for you).")
+        about.pack(fill="x")
+        wrap_to_width(about)
+        box, self.tree = make_tree(page, [("id", "#", 50, False),
+                                          ("paper", "Paper", 420, True),
+                                          ("for", "For", 230, True),
+                                          ("why", "Why", 260, True)])
         box.pack(fill="both", expand=True, pady=(px(10), 0))
         self.tree.bind("<<TreeviewSelect>>", lambda e: self._update_buttons())
 
-        row = ttk.Frame(self.frame)
+        row = ttk.Frame(page)
         row.pack(fill="x", pady=(px(10), 0))
         self.b_browser = ttk.Button(row, text="Get it in a browser window",
                                     style="Accent.TButton", command=self.get_in_browser)
@@ -54,23 +56,29 @@ class NeedsYouTab:
         self.b_attach.pack(side="left", padx=px(8))
         self.b_giveup = ttk.Button(row, text="Give up on it", command=self.give_up)
         self.b_giveup.pack(side="left")
+        row = ttk.Frame(page)             # a row of its own: five buttons side by side don't
+        row.pack(fill="x", pady=(px(8), 0))                    # fit once the text is large
+        ttk.Label(row, text="A file too large to email:", foreground=pal["muted"]).pack(
+            side="left")
         self.b_show = ttk.Button(row, text="Show the file", command=self.show_file)
+        self.b_show.pack(side="left", padx=px(8))
         self.b_shared = ttk.Button(row, text="I've shared it", command=self.mark_shared)
-        self.b_shared.pack(side="right")
-        self.b_show.pack(side="right", padx=px(8))
+        self.b_shared.pack(side="left")
 
-        self.guide = ttk.Label(self.frame, text="", wraplength=px(980), justify="left",
-                               font=f(STRONG), foreground=pal["accent"])
-        self.guide.pack(anchor="w", pady=(px(12), 0))
-        self.waiting = ttk.Frame(self.frame)          # shown while a browser window is open
+        self.guide = ttk.Label(page, text="", justify="left", font=f(STRONG),
+                               foreground=pal["accent"])
+        self.guide.pack(fill="x", pady=(px(12), 0))
+        wrap_to_width(self.guide)
+        self.waiting = ttk.Frame(page)                # shown while a browser window is open
         self.b_skip = ttk.Button(self.waiting, text="Skip this paper", command=self._skip)
         self.b_skip.pack(side="left")
         self.b_stop = ttk.Button(self.waiting, text="Stop", command=self._stop)
         self.b_stop.pack(side="left", padx=px(8))
-        ttk.Label(self.waiting, foreground=pal["muted"],
-                  text="The browser is an ordinary window (not remote-controlled), so "
-                       "\"verify you are human\" checks work normally there.").pack(
-            side="left", padx=px(10))
+        note = ttk.Label(self.waiting, foreground=pal["muted"], justify="left",
+                         text="The browser is an ordinary window (not remote-controlled), so "
+                              "\"verify you are human\" checks work normally there.")
+        note.pack(side="left", fill="x", expand=True, padx=px(10))
+        wrap_to_width(note)
         self._control = None
         self._rows: dict[str, object] = {}
         self._sig = None
@@ -124,7 +132,7 @@ class NeedsYouTab:
         from ..humanbrowser import ManualControl
         self._control = control = ManualControl()
         self.guide.configure(text="Connecting the VPN and opening a browser window…")
-        self.waiting.pack(anchor="w", pady=(app.px(8), 0))
+        self.waiting.pack(fill="x", pady=(app.px(8), 0))
         self.b_browser.configure(state="disabled")
 
         def tell(msg):  # progress from the worker, shown under the list
@@ -214,35 +222,38 @@ class TryTab:
     def __init__(self, app, nb):
         self.app = app
         px, pal = app.px, app.pal
-        self.frame = ttk.Frame(nb, padding=px(18))
-        ttk.Label(self.frame, foreground=pal["muted"], wraplength=px(980), justify="left",
-                  text="Test PaperBot on one paper without any email. The PDF is saved on this "
-                       "PC so you can check it.").pack(anchor="w")
-        row = ttk.Frame(self.frame)
+        self.frame, page = scroll_page(nb, px(18))
+        about = ttk.Label(page, foreground=pal["muted"], justify="left",
+                          text="Test PaperBot on one paper without any email. The PDF is saved "
+                               "on this PC so you can check it.")
+        about.pack(fill="x")
+        wrap_to_width(about)
+        row = ttk.Frame(page)
         row.pack(fill="x", pady=(px(12), 0))
         ttk.Label(row, text="DOI, link or exact title").pack(side="left")
-        self.what = ttk.Entry(row)
+        self.go = ttk.Button(row, text="Fetch", style="Accent.TButton", command=self.fetch)
+        self.go.pack(side="right")
+        self.what = ttk.Entry(row, width=10)          # it takes the room between the two
         self.what.pack(side="left", fill="x", expand=True, padx=px(10))
         self.what.bind("<Return>", lambda e: self.fetch())
-        self.go = ttk.Button(row, text="Fetch", style="Accent.TButton", command=self.fetch)
-        self.go.pack(side="left")
         self.mode = tk.StringVar(value="free+vpn")
-        modes = ttk.Frame(self.frame)
+        modes = ttk.Frame(page)
         modes.pack(fill="x", pady=(px(10), 0))
         for value, text in (("free", "Free copies only (no VPN)"),
                             ("free+vpn", "Free copy first, then the publisher through the VPN"),
                             ("vpn", "Publisher through the VPN only")):
             ttk.Radiobutton(modes, text=text, value=value, variable=self.mode).pack(
-                side="left", padx=(0, px(18)))
-        ttk.Label(self.frame, text="What happened", font=f(STRONG)).pack(
+                anchor="w", pady=px(1))
+        ttk.Label(page, text="What happened", font=f(STRONG)).pack(
             anchor="w", pady=(px(16), px(4)))
         bg, fg = text_colors(pal)
-        self.out = tk.Text(self.frame, height=12, wrap="word", relief="flat", borderwidth=0,
+        self.out = tk.Text(page, height=5, wrap="word", relief="flat", borderwidth=0,
                            background=bg, foreground=fg, font=f(BODY),
                            padx=px(12), pady=px(8))
         self.out.pack(fill="both", expand=True)
         self.out.configure(state="disabled")
-        row2 = ttk.Frame(self.frame)
+        outline(self.out, pal)
+        row2 = ttk.Frame(page)
         row2.pack(fill="x", pady=(px(10), 0))
         self.open_btn = ttk.Button(row2, text="Open the PDF", state="disabled",
                                    command=lambda: os.startfile(self._pdf))

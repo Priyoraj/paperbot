@@ -77,6 +77,9 @@ class Config:
     sync_folder: str = SYNC_FOLDER
     # A Windows notification on this computer when a paper comes to need the owner (notify.py).
     notify_desktop: bool = True
+    # How the app looks on this computer (gui/look.py): a theme, and the text size in percent.
+    look_theme: str = "system"
+    look_text_size: int = 100
     path: Path | None = None
 
     # ---- derived -------------------------------------------------------
@@ -172,6 +175,8 @@ _MAP = {
     ("sync", "enabled"): "sync_enabled",
     ("sync", "folder"): "sync_folder",
     ("notify", "desktop"): "notify_desktop",
+    ("look", "theme"): "look_theme",
+    ("look", "text_size"): "look_text_size",
 }
 
 

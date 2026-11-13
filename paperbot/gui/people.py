@@ -7,8 +7,8 @@ from datetime import datetime
 from tkinter import messagebox, ttk
 
 from .. import config as config_mod
-from .base import BODY, STRONG, clip, f, fill_tree, make_tree
-from .home import text_colors
+from .base import BODY, STRONG, clip, f, fill_tree, make_tree, scroll_page, wrap_to_width
+from .home import outline, text_colors
 
 STATUS_PEOPLE = {"pending": "Waiting for your OK", "approved": "Approved",
                  "denied": "Blocked"}
@@ -68,56 +68,65 @@ class PeopleTab:
     def __init__(self, app, nb):
         self.app = app
         px, pal = app.px, app.pal
-        self.frame = ttk.Frame(nb, padding=px(18))
+        self.frame, page = scroll_page(nb, px(18))
 
-        card = ttk.Frame(self.frame, style="Card.TFrame", padding=px(16))
+        card = ttk.Frame(page, style="Card.TFrame", padding=px(16))
         card.pack(fill="x")
+        card.columnconfigure(0, weight=1)
         self.ask = tk.BooleanVar(value=app.cfg.require_approval)
         ttk.Checkbutton(card, text="Ask me before sending papers to someone new",
                         style="Switch.TCheckbutton", variable=self.ask,
-                        command=self.toggle_ask).grid(row=0, column=0, columnspan=3, sticky="w")
-        ttk.Label(card, foreground=pal["muted"], wraplength=px(900), justify="left",
-                  text="When on, the first request from a new address waits until you approve "
-                       "it - here, or by replying \"yes\" to the email PaperBot sends you. When "
-                       "off, anyone who emails a request gets the papers.").grid(
-            row=1, column=0, columnspan=3, sticky="w", pady=(px(4), px(10)))
+                        command=self.toggle_ask).grid(row=0, column=0, sticky="w")
+        about = ttk.Label(card, foreground=pal["muted"], justify="left",
+                          text="When on, the first request from a new address waits until you "
+                               "approve it - here, or by replying \"yes\" to the email PaperBot "
+                               "sends you. When off, anyone who emails a request gets the "
+                               "papers.")
+        about.grid(row=1, column=0, sticky="ew", pady=(px(4), px(10)))
+        wrap_to_width(about)
         rules = ttk.Frame(card)           # two rows of: what - box - button - hint
-        rules.grid(row=2, column=0, columnspan=3, sticky="w")
+        rules.grid(row=2, column=0, sticky="ew")
+        rules.columnconfigure(3, weight=1)
         ttk.Label(rules, text="Always trust addresses at").grid(row=0, column=0, sticky="w")
-        self.domains = ttk.Entry(rules, width=36)
+        self.domains = ttk.Entry(rules, width=32)
         self.domains.grid(row=0, column=1, padx=px(10))
         self.domains.bind("<Return>", lambda e: self.save_domains())
         ttk.Button(rules, text="Save", command=self.save_domains).grid(row=0, column=2,
                                                                        sticky="ew")
-        ttk.Label(rules, text="e.g.  university.edu  (several: separate with commas)",
-                  foreground=pal["muted"]).grid(row=0, column=3, sticky="w", padx=px(12))
+        hint = ttk.Label(rules, text="e.g.  university.edu  (several: separate with commas)",
+                         foreground=pal["muted"], justify="left")
+        hint.grid(row=0, column=3, sticky="ew", padx=px(12))
+        wrap_to_width(hint)
         ttk.Label(rules, text="Never send papers to").grid(row=1, column=0, sticky="w",
                                                            pady=(px(8), 0))
-        self.block_entry = ttk.Entry(rules, width=36)
+        self.block_entry = ttk.Entry(rules, width=32)
         self.block_entry.grid(row=1, column=1, padx=px(10), pady=(px(8), 0))
         self.block_entry.bind("<Return>", lambda e: self.block_address())
         ttk.Button(rules, text="Block", command=self.block_address).grid(
             row=1, column=2, sticky="ew", pady=(px(8), 0))
-        ttk.Label(rules, text="an email address - also of someone who hasn't written yet",
-                  foreground=pal["muted"]).grid(row=1, column=3, sticky="w", padx=px(12),
-                                                pady=(px(8), 0))
+        hint = ttk.Label(rules, text="an email address - also of someone who hasn't written yet",
+                         foreground=pal["muted"], justify="left")
+        hint.grid(row=1, column=3, sticky="ew", padx=px(12), pady=(px(8), 0))
+        wrap_to_width(hint)
 
-        ttk.Label(self.frame, text="People who have asked for papers, and addresses you blocked",
+        ttk.Label(page, text="People who have asked for papers, and addresses you blocked",
                   font=f(STRONG)).pack(anchor="w", pady=(px(16), px(6)))
-        box, self.tree = make_tree(self.frame, [("email", "Email", 280, True),
-                                                ("name", "Name", 200, True),
-                                                ("status", "Status", 190, False),
-                                                ("since", "Since", 150, False)])
+        box, self.tree = make_tree(page, [("email", "Email", 280, True),
+                                          ("name", "Name", 200, True),
+                                          ("status", "Status", 170, False),
+                                          ("since", "Since", 130, False)])
         box.pack(fill="both", expand=True)
-        row = ttk.Frame(self.frame)
+        row = ttk.Frame(page)
         row.pack(fill="x", pady=(px(10), 0))
         ttk.Button(row, text="Approve", style="Accent.TButton", command=self.approve).pack(
             side="left")
         ttk.Button(row, text="Block", command=self.block).pack(side="left", padx=px(8))
         ttk.Button(row, text="Forget", command=self.forget).pack(side="left")
-        ttk.Label(row, text="Approving answers their waiting requests straight away. To lift a "
-                            "block, press Approve or Forget.",
-                  foreground=pal["muted"]).pack(side="left", padx=px(14))
+        hint = ttk.Label(row, text="Approving answers their waiting requests straight away. To "
+                                   "lift a block, press Approve or Forget.",
+                         foreground=pal["muted"], justify="left")
+        hint.pack(side="left", fill="x", expand=True, padx=px(14))
+        wrap_to_width(hint)
         self._sig = None
 
     def refresh(self) -> None:
@@ -244,19 +253,21 @@ class RequestsTab:
     def __init__(self, app, nb):
         self.app = app
         px = app.px
-        self.frame = ttk.Frame(nb, padding=px(18))
-        ttk.Label(self.frame, text="Every request PaperBot has received (newest first). Select "
-                                   "one to see what happened to each paper.",
-                  foreground=app.pal["muted"]).pack(anchor="w", pady=(0, px(8)))
-        box, self.tree = make_tree(self.frame, [("when", "Received", 140, False),
-                                                ("from", "From", 260, True),
-                                                ("papers", "Papers", 280, True),
-                                                ("status", "Status", 190, False)], height=12)
+        self.frame, page = scroll_page(nb, px(18))
+        about = ttk.Label(page, text="Every request PaperBot has received (newest first). "
+                                     "Select one to see what happened to each paper.",
+                          foreground=app.pal["muted"], justify="left")
+        about.pack(fill="x", pady=(0, px(8)))
+        wrap_to_width(about)
+        box, self.tree = make_tree(page, [("when", "Received", 130, False),
+                                          ("from", "From", 260, True),
+                                          ("papers", "Papers", 280, True),
+                                          ("status", "Status", 190, False)])
         self.tree.configure(selectmode="browse")
         box.pack(fill="both", expand=True)
         self.tree.bind("<<TreeviewSelect>>", lambda e: self.show_details())
         bg, fg = text_colors(app.pal)
-        self.details = tk.Text(self.frame, height=8, wrap="word", relief="flat", borderwidth=0,
+        self.details = tk.Text(page, height=7, wrap="word", relief="flat", borderwidth=0,
                                background=bg, foreground=fg, font=f(BODY),
                                padx=px(12), pady=px(8))
         self.details.tag_configure("muted", foreground=app.pal["muted"])
@@ -264,6 +275,7 @@ class RequestsTab:
         self.details.tag_configure("bad", foreground=app.pal["bad"])
         self.details.pack(fill="x", pady=(px(10), 0))
         self.details.configure(state="disabled")
+        outline(self.details, app.pal)
         self._sig = None
 
     def refresh(self) -> None:

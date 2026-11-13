@@ -1,7 +1,11 @@
 """Developer tool: open the desktop app on DEMO data (a throwaway folder, never the real
 mailbox, VPN or settings) and save a screenshot of every screen.
 
-    .venv\\Scripts\\python scripts\\gui_screenshots.py <output-folder> [--dark]
+    .venv\\Scripts\\python scripts\\gui_screenshots.py <output-folder> [--theme dark]
+        [--text-size 125] [--only home,settings]
+
+--theme: system, light, dark, paper, midnight or contrast (--dark and --light still work).
+--only: just these screens (names as in the file names it writes).
 """
 from __future__ import annotations
 
@@ -27,9 +31,19 @@ ROOT = Path(__file__).resolve().parent.parent
 from paperbot import config as config_mod  # noqa: E402
 from paperbot.db import DB, now_iso  # noqa: E402
 
+def option(name: str, default: str) -> str:
+    return sys.argv[sys.argv.index(name) + 1] if name in sys.argv else default
+
+
+THEME = option("--theme", "dark" if "--dark" in sys.argv else
+               "light" if "--light" in sys.argv else "system")
+TEXT_SIZE = int(option("--text-size", "100"))
+ONLY = [s for s in option("--only", "").split(",") if s]
+
 for section, key, value in [("owner", "name", "Priya"), ("owner", "email", "priya@example.com"),
                             ("mail", "username", "priya.papers@example.com"),
-                            ("access", "auto_approve_domains", ["college.edu"])]:
+                            ("access", "auto_approve_domains", ["college.edu"]),
+                            ("look", "theme", THEME), ("look", "text_size", TEXT_SIZE)]:
     config_mod.set_value(section, key, value, DEMO / "config.toml")
 
 db = DB(DEMO / "data" / "paperbot.db")
@@ -122,10 +136,6 @@ def grab_png(x: int, y: int, w: int, h: int) -> bytes:
 
 from paperbot.gui import base  # noqa: E402
 
-if "--dark" in sys.argv:
-    base.windows_prefers_dark = lambda: True
-if "--light" in sys.argv:
-    base.windows_prefers_dark = lambda: False
 base.make_dpi_aware()
 import tkinter as tk  # noqa: E402
 
@@ -136,18 +146,33 @@ from paperbot.sync import NoSync  # noqa: E402
 
 gui_window.make_sync = lambda cfg, db: NoSync()   # the demo never looks at a real mailbox
 notify.show_toast = lambda *a, **kw: None         # ...and its demo papers pop up no notification
+notify.windows_setting = lambda: "Enabled"        # ...whatever Windows on this computer says
+notify.register = lambda: None
 
 root = tk.Tk()
 app = App(root)
-root.geometry("+30+30")
 root.attributes("-topmost", True)
 screens = ["home", "needs", "needs-waiting", "people", "requests", "try", "settings",
            "settings-custom", "share", "home-together", "settings-together"]
+if ONLY:                # also "settings@midnight" / "home@125": switch theme or text size in
+    screens = ONLY      # the running window first (as Settings > Appearance does), then show
+suffix = "" if THEME == "system" and TEXT_SIZE == 100 else f"-{THEME}" + (
+    "" if TEXT_SIZE == 100 else f"-{TEXT_SIZE}")
 
 
 def show(i: int) -> None:
     if i >= len(screens):
         root.destroy()
+        return
+    if "@" in screens[i]:              # a change made while the app is open
+        page, change = screens[i].split("@")
+        if change.isdigit():
+            app.set_text_size(int(change))
+        else:
+            app.set_theme(change)
+        app.show(page)
+        app.refresh_all()
+        root.after(1800, lambda: shoot(i))
         return
     if screens[i] == "needs-waiting":  # what the tab looks like while a browser window is open
         tab = app.tabs["needs"]
@@ -156,7 +181,7 @@ def show(i: int) -> None:
                                  "document recognition\" (for asha.rao@uni.edu): a browser window "
                                  "is open. Solve the check there if one appears, then download "
                                  "the PDF - PaperBot picks it up.")
-        tab.waiting.pack(anchor="w", pady=(app.px(8), 0))
+        tab.waiting.pack(fill="x", pady=(app.px(8), 0))
         root.after(1800, lambda: shoot(i))
         return
     if screens[i] == "settings-custom":  # switch to custom limits above the recommendation
@@ -199,10 +224,19 @@ def show(i: int) -> None:
 
 def shoot(i: int) -> None:
     root.update()
-    png = grab_png(root.winfo_rootx(), root.winfo_rooty(), root.winfo_width(),
-                   root.winfo_height())
-    suffix = "-dark" if "--dark" in sys.argv else ""
+    from ctypes import wintypes
+    rect = wintypes.RECT()
+    ctypes.windll.user32.GetParent.restype = ctypes.c_void_p
+    ctypes.windll.user32.GetWindowRect(
+        ctypes.c_void_p(ctypes.windll.user32.GetParent(root.winfo_id())), ctypes.byref(rect))
+    if "--frame" in sys.argv:          # the whole window, title bar and all
+        png = grab_png(rect.left, rect.top, rect.right - rect.left, rect.bottom - rect.top)
+    else:
+        png = grab_png(root.winfo_rootx(), root.winfo_rooty(), root.winfo_width(),
+                       root.winfo_height())
     (OUT / f"{i + 1}-{screens[i]}{suffix}.png").write_bytes(png)
+    print(f"{screens[i]}: window {root.geometry()}, on screen ({rect.left},{rect.top})-"
+          f"({rect.right},{rect.bottom}), text {app.cfg.look_text_size}%")
     show(i + 1)
 
 

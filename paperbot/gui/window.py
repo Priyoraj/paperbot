@@ -13,7 +13,8 @@ from .. import notify, winsvc
 from ..app import (SyncError, Together, build_bot, make_sync, setup_logging, single_instance,
                    together, vpn_signin_saved)
 from ..db import DB
-from .base import Bg, STRONG, TITLE, apply_theme, f, fit_window, friendly, make_dpi_aware
+from . import look
+from .base import Bg, STRONG, TITLE, f, fit_window, friendly, make_dpi_aware
 from .instance import Instance
 
 log = logging.getLogger("paperbot.gui")
@@ -39,12 +40,15 @@ class App:
     def __init__(self, root: tk.Tk, instance: Instance | None = None):
         self.root = root
         self.instance = instance
-        self.pal = apply_theme(root)
-        self.scale = root.winfo_fpixels("1i") / 96
+        self.scale = root.winfo_fpixels("1i") / 96        # 1.5 where Windows scales to 150%
         self.bg = Bg(root)
         config_mod.init_config()  # first start: config.toml from the template
         self.cfg = config_mod.load()
         setup_logging(self.cfg, console=False)
+        # Theme and text size (look.py). pal: the colours this app draws with itself.
+        self.pal = look.apply_theme(root, self.cfg.look_theme, self.scale)
+        look.set_text_size(root, self.cfg.look_text_size, self.scale)
+        self._rebuild_due = False         # pages to be made anew once nothing is running
         self.db = DB(self.cfg.data_dir / "paperbot.db")
         self.task: winsvc.TaskStatus | None = None
         self.app_start: winsvc.TaskStatus | None = None   # "open the app after sign-in"
@@ -57,7 +61,7 @@ class App:
         self.started_here = False         # the owner pressed Start in this window
         self._picking_up = False
         root.title("PaperBot")
-        fit_window(root, self.px(1120), self.px(740), self.px(960), self.px(640))
+        self.size_window()
         set_icon(root)
         self._build()
         self.refresh_all()
@@ -65,6 +69,7 @@ class App:
         self.refresh_app_start()
         self.refresh_notify_setting()
         self.refresh_vpn_status()
+        root.after(150, self.color_title_bar)
         root.after(4000, self._tick)
         root.after(30000, self._slow_tick)
         root.after(1500, self._shared_tick)
@@ -72,7 +77,15 @@ class App:
             root.after(LISTEN_EVERY_MS, self._listen)
 
     def px(self, n: float) -> int:
+        """Pixels for spacing and widths: they follow the display's scaling."""
         return int(n * self.scale)
+
+    def size_window(self) -> None:
+        """The window's size: larger text gets a larger window, as far as the screen has
+        room for one (fit_window sees to that)."""
+        grow = max(1.0, look.clean_text_size(self.cfg.look_text_size) / 100)
+        fit_window(self.root, int(self.px(1120) * grow), int(self.px(740) * grow),
+                   self.px(960), self.px(640))
 
     # ---- layout -----------------------------------------------------------------
     def _build(self) -> None:
@@ -82,7 +95,8 @@ class App:
         from .share import ShareTab
         from .work import NeedsYouTab, TryTab
 
-        outer = ttk.Frame(self.root, padding=(self.px(22), self.px(14), self.px(22), self.px(8)))
+        self.outer = outer = ttk.Frame(
+            self.root, padding=(self.px(22), self.px(14), self.px(22), self.px(8)))
         outer.pack(fill="both", expand=True)
         header = ttk.Frame(outer)
         header.pack(fill="x")
@@ -93,6 +107,12 @@ class App:
         self.mode_label = ttk.Label(header, text="", font=f(STRONG))
         self.mode_label.pack(side="right", pady=(self.px(8), 0))
 
+        bar = ttk.Frame(outer)            # before the pages: it keeps its place however
+        bar.pack(side="bottom", fill="x")                  # much room they would like
+        self.status = ttk.Label(bar, text="Ready.", foreground=self.pal["muted"])
+        self.status.pack(side="left")
+        self.progress = ttk.Progressbar(bar, mode="indeterminate", length=self.px(180))
+
         self.nb = ttk.Notebook(outer)
         self.nb.pack(fill="both", expand=True, pady=(self.px(10), self.px(6)))
         self.tabs = {}
@@ -102,14 +122,61 @@ class App:
             self.nb.add(tab.frame, text=tab.title)
         self.nb.bind("<<NotebookTabChanged>>", lambda e: self.refresh_all())
 
-        bar = ttk.Frame(outer)
-        bar.pack(fill="x")
-        self.status = ttk.Label(bar, text="Ready.", foreground=self.pal["muted"])
-        self.status.pack(side="left")
-        self.progress = ttk.Progressbar(bar, mode="indeterminate", length=self.px(180))
-
     def show(self, key: str) -> None:
         self.nb.select(self.tabs[key].frame)
+
+    def page(self) -> str:
+        """The key of the page that is showing."""
+        current = self.nb.select()
+        return next((key for key, tab in self.tabs.items() if str(tab.frame) == current),
+                    "home")
+
+    # ---- how it looks (Settings > Appearance, look.py) -----------------------------
+    def rebuild(self) -> None:
+        """Make every page anew, after the theme or the text size changed: colours and
+        measurements are fixed when a page is made. The page that was showing shows again,
+        and what was typed into Settings but not saved yet is still there."""
+        if self._busy:                    # something is running that reports to these pages
+            self._rebuild_due = True
+            return
+        self._rebuild_due = False
+        showing, status = self.page(), self.status.cget("text")
+        typed = self.tabs["settings"].typed()
+        self.outer.destroy()
+        self._build()
+        self.tabs["settings"].retype(typed)
+        self.show(showing)
+        self.set_status(status)
+        self.refresh_all()
+
+    def color_title_bar(self, tries: int = 6) -> None:
+        """The window's title bar in the theme's colours - once the window is on screen."""
+        if not look.title_bar(self.root, self.pal) and tries > 0:
+            self.root.after(300, lambda: self.color_title_bar(tries - 1))
+
+    def set_theme(self, theme: str, save: bool = True) -> None:
+        theme = look.clean_theme(theme)
+        if save and theme != self.cfg.look_theme:
+            config_mod.set_value("look", "theme", theme, self.cfg.path)
+        self.cfg.look_theme = theme
+        self.pal = look.apply_theme(self.root, theme, self.scale)
+        look.set_text_size(self.root, self.cfg.look_text_size, self.scale)
+        self.color_title_bar()
+        self.rebuild()
+
+    def preview_text_size(self, percent) -> None:
+        """While the slider is being dragged: the text follows, nothing is saved yet."""
+        look.set_text_size(self.root, percent, self.scale)
+
+    def set_text_size(self, percent) -> None:
+        percent = look.clean_text_size(percent)
+        if percent != self.cfg.look_text_size:
+            config_mod.set_value("look", "text_size", percent, self.cfg.path)
+        self.cfg.look_text_size = percent
+        look.set_text_size(self.root, percent, self.scale)
+        if self.root.state() == "normal":             # not while maximised or in the taskbar
+            self.size_window()
+        self.rebuild()
 
     def come_forward(self, page: str = "") -> None:
         """The app was started a second time, or a notification was clicked: show this
@@ -161,6 +228,8 @@ class App:
             if not self._busy:
                 self.progress.stop()
                 self.progress.pack_forget()
+                if self._rebuild_due:     # the look was changed meanwhile: now is the time
+                    self.root.after(50, self.rebuild)
             self.refresh_all()
 
         def ok(result):
@@ -332,6 +401,8 @@ class App:
         self.refresh_task_status()
         if self.notifications_blocked:    # until the owner has switched them on in Windows
             self.refresh_notify_setting()
+        if self.cfg.look_theme == "system" and look.resolve("system") != self.pal["name"]:
+            self.set_theme("system", save=False)      # Windows went from light to dark, or back
         self.root.after(30000, self._slow_tick)
 
 

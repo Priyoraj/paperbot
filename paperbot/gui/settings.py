@@ -5,6 +5,7 @@ import datetime as dt
 import time
 import tkinter as tk
 import webbrowser
+from tkinter import font as tkfont
 from tkinter import messagebox, ttk
 
 from .. import config as config_mod
@@ -12,10 +13,12 @@ from .. import notify, winsvc
 from ..config import RECOMMENDED_LIMITS
 from ..app import (check_sharing, has_mail_password, make_vpn, set_secret, setup_checks,
                    start_sharing, stop_sharing, vpn_credentials, vpn_profiles)
-from .base import STRONG, SUBTITLE, ScrollFrame, f
+from . import look
+from .base import BODY, STRONG, SUBTITLE, ScrollFrame, f, wrap_to_width
 
 # (section, key, label, kind, help); kind: str | int | float | bool | kw | choice:a,b | vpnname
 SECTIONS = [
+    ("Appearance", [("@look",)]),
     ("Daily safety limits", [("@limits",)]),
     ("You", [
         ("owner", "name", "Your name", "str", "Signs the replies, e.g. your first name"),
@@ -116,6 +119,9 @@ class SettingsTab:
                 pady=(px(18 if row else 6), px(6)))
             row += 1
             for spec in fields:
+                if spec[0] == "@look":
+                    row = self._look_block(body, row)
+                    continue
                 if spec[0] == "@limits":
                     row = self._limits_block(body, row)
                     continue
@@ -130,7 +136,7 @@ class SettingsTab:
                     continue
                 if spec[0] == "@notifytest":
                     line = ttk.Frame(body)
-                    line.grid(row=row, column=0, columnspan=3, sticky="w", padx=px(18),
+                    line.grid(row=row, column=0, columnspan=3, sticky="ew", padx=px(18),
                               pady=(px(6), 0))
                     ttk.Button(line, text="Send a test notification",
                                command=self.test_notification).pack(side="left")
@@ -139,13 +145,14 @@ class SettingsTab:
                     link.pack(side="left", padx=px(12))
                     link.bind("<Button-1>",
                               lambda e: self.app.open_windows_notification_settings())
-                    ttk.Label(line, text="clicking a notification opens PaperBot on \"Needs "
-                                         "you\"", foreground=pal["muted"]).pack(side="left")
+                    note = ttk.Label(line, text="clicking a notification opens PaperBot on "
+                                                "\"Needs you\"", foreground=pal["muted"],
+                                     justify="left")
+                    note.pack(side="left", fill="x", expand=True)
+                    wrap_to_width(note)
                     row += 1
-                    self.notify_status = ttk.Label(body, text="", font=f(STRONG),
-                                                   wraplength=px(1000), justify="left")
-                    self.notify_status.grid(row=row, column=0, columnspan=3, sticky="w",
-                                            padx=px(18), pady=(px(6), 0))
+                    self.notify_status = self._words(body, row, font=f(STRONG),
+                                                     pady=(px(6), 0))
                     row += 1
                     continue
                 section, key, label, kind, hint = spec
@@ -154,12 +161,23 @@ class SettingsTab:
         self.load_values()
 
     # ---- form building ------------------------------------------------------------
+    def _words(self, body, row, text: str = "", column: int = 0, **look_and_place):
+        """A line or paragraph across the form that wraps to the room it has."""
+        px = self.app.px
+        place = {k: look_and_place.pop(k) for k in ("padx", "pady") if k in look_and_place}
+        label = ttk.Label(body, text=text, justify="left", **look_and_place)
+        label.grid(row=row, column=column, columnspan=3 - column, sticky="ew",
+                   **{"padx": px(18), **place})
+        wrap_to_width(label, most=px(1000))
+        return label
+
     def _field(self, body, row, section, key, label, kind, hint) -> int:
+        """One setting: what it is, the box to change it in, and under that a word of help."""
         px = self.app.px
         if kind == "bool":
             var = tk.BooleanVar()
             ttk.Checkbutton(body, text=label, variable=var).grid(
-                row=row, column=0, columnspan=2, sticky="w", padx=px(18), pady=px(3))
+                row=row, column=0, columnspan=3, sticky="w", padx=px(18), pady=px(3))
         else:
             ttk.Label(body, text=label).grid(row=row, column=0, sticky="w", padx=px(18),
                                               pady=px(3))
@@ -170,16 +188,119 @@ class SettingsTab:
             elif kind == "vpnname":
                 w = ttk.Combobox(body, textvariable=var, width=30)
                 self.vpn_combo = w
-                self.app.bg.run(vpn_profiles, lambda names: w.configure(values=names))
+                self.app.bg.run(vpn_profiles,       # the page may have been made anew meanwhile
+                                lambda names: w.winfo_exists() and w.configure(values=names))
             else:
                 w = ttk.Entry(body, textvariable=var,
-                              width=12 if kind in ("int", "float") else 46)
+                              width=12 if kind in ("int", "float") else 38)
             w.grid(row=row, column=1, sticky="w", padx=px(8), pady=px(3))
-        if hint:
-            ttk.Label(body, text=hint, foreground=self.app.pal["muted"]).grid(
-                row=row, column=2, sticky="w", padx=(px(4), px(18)))
         self.vars[(section, key)] = (kind, var)
+        row += 1
+        if hint:                          # under the box, where it has the room to wrap
+            self._words(body, row, hint, column=0 if kind == "bool" else 1,
+                        foreground=self.app.pal["muted"],
+                        padx=(px(48) if kind == "bool" else px(8), px(18)),
+                        pady=(0, px(6)))
+            row += 1
+        return row
+
+    def _look_block(self, body, row) -> int:
+        """Theme and text size. Both take effect at once and are saved at once: they are no
+        part of "Save changes"."""
+        app, px, pal = self.app, self.app.px, self.app.pal
+        ttk.Label(body, text="Theme").grid(row=row, column=0, sticky="w", padx=px(18),
+                                           pady=px(3))
+        self.theme_var = tk.StringVar(value=look.THEMES[look.clean_theme(app.cfg.look_theme)])
+        self.theme_box = ttk.Combobox(body, textvariable=self.theme_var, state="readonly",
+                                      values=list(look.THEMES.values()), width=20)
+        self.theme_box.grid(row=row, column=1, sticky="w", padx=px(8), pady=px(3))
+        self.theme_box.bind("<<ComboboxSelected>>", lambda e: self._theme_chosen())
+        row += 1
+
+        size = look.clean_text_size(app.cfg.look_text_size)
+        ttk.Label(body, text="Text size").grid(row=row, column=0, sticky="w", padx=px(18),
+                                               pady=px(3))
+        line = ttk.Frame(body)
+        line.grid(row=row, column=1, columnspan=2, sticky="w", padx=px(8), pady=px(3))
+        ttk.Label(line, text="A", font=f(BODY), foreground=pal["muted"]).pack(side="left")
+        self.size_scale = ttk.Scale(line, from_=look.TEXT_MIN, to=look.TEXT_MAX,
+                                    orient="horizontal", length=px(240))
+        self.size_scale.set(size)
+        self.size_scale.pack(side="left", padx=px(8))
+        ttk.Label(line, text="A", font=f(SUBTITLE), foreground=pal["muted"]).pack(side="left")
+        self.size_label = ttk.Label(line, text="", width=6, font=f(STRONG))
+        self.size_label.pack(side="left", padx=(px(14), px(8)))
+        self.size_reset = ttk.Button(line, text="Normal size", command=self._text_size_reset)
+        self.size_reset.pack(side="left")
+        for done in ("<ButtonRelease-1>", "<KeyRelease>"):
+            self.size_scale.bind(done, lambda e: self._text_size_chosen())
+        row += 1
+
+        # What the size on the slider looks like, before it is let go of and all text follows.
+        self.sample_font = tkfont.Font(root=app.root, font=f(BODY))
+        self.sample = ttk.Label(body, text="", font=self.sample_font)
+        self.sample.grid(row=row, column=1, columnspan=2, sticky="w", padx=px(8))
+        self.sample.grid_remove()
+        row += 1
+        self._words(body, row, "Both change at once and are remembered on this computer. "
+                               "They are not part of \"Save changes\".", column=1,
+                    foreground=pal["muted"], padx=(px(8), px(18)), pady=(0, px(6)))
+        self._show_text_size(size)
+        self.size_scale.configure(command=self._text_size_moving)     # now all of it is there
         return row + 1
+
+    def _show_text_size(self, size: int) -> None:
+        self.size_label.configure(text=f"{size}%")
+        self.size_reset.state(["disabled" if size == look.TEXT_NORMAL else "!disabled"])
+
+    def _text_size_moving(self, value) -> None:
+        """The slider is being dragged: say the size and show a sample in it. The app's own
+        text follows when the slider is let go of."""
+        size = look.clean_text_size(value)
+        self._show_text_size(size)
+        if size == look.clean_text_size(self.app.cfg.look_text_size):
+            self.sample.grid_remove()
+            return
+        self.sample_font.configure(
+            size=-look.font_px(look.FONT_PX["SunValleyBodyFont"], self.app.scale, size))
+        self.sample.configure(text="A paper needs you - this is the size the text will be.")
+        self.sample.grid()
+
+    def _text_size_chosen(self) -> None:
+        size = look.clean_text_size(self.size_scale.get())
+        self.size_scale.set(size)             # onto the nearest size on offer
+        self._show_text_size(size)
+        if size != look.clean_text_size(self.app.cfg.look_text_size):
+            # A moment later: the pages are made anew, this slider with them.
+            self.app.root.after(20, lambda: self.app.set_text_size(size))
+
+    def _text_size_reset(self) -> None:
+        self.size_scale.set(look.TEXT_NORMAL)
+        self._text_size_chosen()
+
+    def _theme_chosen(self) -> None:
+        keys = {name: key for key, name in look.THEMES.items()}
+        theme = keys.get(self.theme_var.get(), "system")
+        self.theme_box.selection_clear()
+        if theme != look.clean_theme(self.app.cfg.look_theme):
+            self.app.root.after(20, lambda: self.app.set_theme(theme))
+
+    def typed(self) -> dict:
+        """What the form holds right now, saved or not."""
+        held = {}
+        for key, (_, var) in self.vars.items():
+            try:
+                held[key] = var.get()
+            except tk.TclError:
+                pass
+        return held
+
+    def retype(self, typed: dict) -> None:
+        """Put back what typed() gave: the pages were made anew in between."""
+        for key, value in typed.items():
+            if key in self.vars:
+                self.vars[key][1].set(value)
+        self._sync_limits()
 
     def _limits_block(self, body, row) -> int:
         px, pal = self.app.px, self.app.pal
@@ -187,14 +308,15 @@ class SettingsTab:
         rec = tk.BooleanVar()
         self.vars[("access", "use_recommended_limits")] = ("bool", rec)
         line = ttk.Frame(body)
-        line.grid(row=row, column=0, columnspan=3, sticky="w", padx=px(18), pady=(px(2), px(4)))
+        line.grid(row=row, column=0, columnspan=3, sticky="ew", padx=px(18), pady=(px(2), px(4)))
         ttk.Checkbutton(line, text="Use the recommended safe limits", style="Switch.TCheckbutton",
                         variable=rec, command=lambda: self._sync_limits(user_toggled=True)).pack(
             side="left")
-        self.limit_mode = ttk.Label(line, text="", foreground=pal["muted"])
-        self.limit_mode.pack(side="left", padx=px(14))
+        self.limit_mode = ttk.Label(line, text="", foreground=pal["muted"], justify="left")
+        self.limit_mode.pack(side="left", fill="x", expand=True, padx=px(14))
+        wrap_to_width(self.limit_mode)
         row += 1
-        ttk.Label(body, foreground=pal["muted"], wraplength=px(1000), justify="left", text=(
+        self._words(body, row, (
             f"Recommended: {r['max_papers_per_day']} downloads a day through the institute in "
             f"total, {r['own_reserve_per_day']} of them kept for your own use; at most "
             f"{r['max_papers_per_hour']} an hour and {r['max_papers_per_person_per_day']} per "
@@ -202,8 +324,7 @@ class SettingsTab:
             "publish their thresholds, but libraries report blocks after e.g. 100 articles in 40 "
             "minutes or 25 in 5 minutes, and these values stay far below that. Free copies don't "
             "count. When a limit is reached, colleagues are asked to send the paper again "
-            "tomorrow.")).grid(row=row, column=0, columnspan=3, sticky="w", padx=px(18),
-                               pady=(0, px(8)))
+            "tomorrow."), foreground=pal["muted"], pady=(0, px(8)))
         row += 1
         self.limit_spins = {}
         for section, key, label, lo, hi, _ in LIMIT_FIELDS:
@@ -216,14 +337,9 @@ class SettingsTab:
             self.limit_spins[(section, key)] = spin
             var.trace_add("write", lambda *a: self._update_limit_summary())
             row += 1
-        self.limit_summary = ttk.Label(body, text="", font=f(STRONG), wraplength=px(1000),
-                                       justify="left")
-        self.limit_summary.grid(row=row, column=0, columnspan=3, sticky="w", padx=px(18),
-                                pady=(px(8), 0))
+        self.limit_summary = self._words(body, row, font=f(STRONG), pady=(px(8), 0))
         row += 1
-        self.limit_warning = ttk.Label(body, text="", foreground=pal["warn"],
-                                       wraplength=px(1000), justify="left")
-        self.limit_warning.grid(row=row, column=0, columnspan=3, sticky="w", padx=px(18))
+        self.limit_warning = self._words(body, row, foreground=pal["warn"])
         row += 1
         ttk.Button(body, text="Back to recommended", command=self._reset_limits).grid(
             row=row, column=0, sticky="w", padx=px(18), pady=(px(8), 0))
@@ -286,7 +402,7 @@ class SettingsTab:
     def _together_block(self, body, row) -> int:
         """PaperBot on a second computer for the same mailbox: status and three buttons."""
         px, pal = self.app.px, self.app.pal
-        ttk.Label(body, foreground=pal["muted"], wraplength=px(1000), justify="left", text=(
+        self._words(body, row, (
             "Do you run PaperBot on a second computer for the same mailbox, say an office PC "
             "and a laptop? They can work together: every request is answered once, by "
             "whichever computer is on; people, requests and the daily limits are the same on "
@@ -295,15 +411,12 @@ class SettingsTab:
             f"{self.app.cfg.sync_folder} (in Gmail: a label). Press Start on one computer and "
             "the other one joins by itself. Until then, keep automatic mode on in one "
             "computer only. The settings on this page are not shared: set the limits and "
-            "approval the same on both.")).grid(row=row, column=0, columnspan=3, sticky="w",
-                                                padx=px(18), pady=(px(2), px(8)))
+            "approval the same on both."), foreground=pal["muted"], pady=(px(2), px(8)))
         row += 1
-        self.together_status = ttk.Label(body, text="", font=f(STRONG), wraplength=px(1000),
-                                         justify="left")
-        self.together_status.grid(row=row, column=0, columnspan=3, sticky="w", padx=px(18))
+        self.together_status = self._words(body, row, font=f(STRONG))
         row += 1
         line = ttk.Frame(body)
-        line.grid(row=row, column=0, columnspan=3, sticky="w", padx=px(18), pady=(px(10), 0))
+        line.grid(row=row, column=0, columnspan=3, sticky="ew", padx=px(18), pady=(px(10), 0))
         self.b_together_start = ttk.Button(line, text="Start", style="Accent.TButton",
                                            command=self.start_together)
         self.b_together_start.pack(side="left")
@@ -311,8 +424,10 @@ class SettingsTab:
                                           command=self.stop_together)
         self.b_together_stop.pack(side="left", padx=px(8))
         ttk.Button(line, text="Check the mailbox", command=self.check_together).pack(side="left")
-        ttk.Label(line, text="saves, reads and deletes one test message; changes nothing else",
-                  foreground=pal["muted"]).pack(side="left", padx=px(12))
+        note = ttk.Label(line, text="saves, reads and deletes one test message; changes nothing "
+                                    "else", foreground=pal["muted"], justify="left")
+        note.pack(side="left", fill="x", expand=True, padx=px(12))
+        wrap_to_width(note)
         return row + 1
 
     def _password_row(self, body, row, mail: bool) -> int:

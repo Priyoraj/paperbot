@@ -7,7 +7,7 @@ from tkinter import filedialog, messagebox, ttk
 
 from .. import sharepage
 from ..config import ConfigError
-from .base import STRONG, SUBTITLE, f
+from .base import STRONG, SUBTITLE, f, scroll_page, wrap_to_width
 
 
 class ShareTab:
@@ -16,21 +16,27 @@ class ShareTab:
     def __init__(self, app, nb):
         self.app = app
         px, pal = app.px, app.pal
-        self.frame = ttk.Frame(nb, padding=px(22))
-        ttk.Label(self.frame, text="Let colleagues ask without writing emails by hand",
-                  font=f(SUBTITLE)).pack(anchor="w")
-        ttk.Label(self.frame, wraplength=px(960), justify="left", foreground=pal["muted"],
-                  text="Send them the request page: a single file they open in any browser, "
-                       "on Windows, Mac or phone, with nothing to install. They paste DOIs, "
-                       "links or titles. The page looks each one up so they can confirm the "
-                       "right paper, then opens their Gmail or Outlook with the request filled "
-                       "in. PaperBot answers it like any other request.").pack(
-            anchor="w", pady=(px(6), px(14)))
+        self.frame, page = scroll_page(nb, px(22))
 
-        card = ttk.Frame(self.frame, style="Card.TFrame", padding=px(16))
+        def words(parent, text, **look):
+            """A paragraph that wraps to the width of the page."""
+            label = ttk.Label(parent, text=text, justify="left", **look)
+            wrap_to_width(label, most=px(1000))
+            return label
+
+        words(page, "Let colleagues ask without writing emails by hand",
+              font=f(SUBTITLE)).pack(fill="x")
+        words(page, "Send them the request page: a single file they open in any browser, on "
+                    "Windows, Mac or phone, with nothing to install. They paste DOIs, links or "
+                    "titles. The page looks each one up so they can confirm the right paper, "
+                    "then opens their Gmail or Outlook with the request filled in. PaperBot "
+                    "answers it like any other request.",
+              foreground=pal["muted"]).pack(fill="x", pady=(px(6), px(14)))
+
+        card = ttk.Frame(page, style="Card.TFrame", padding=px(16))
         card.pack(fill="x")
-        self.dest = ttk.Label(card, text="", font=f(STRONG))
-        self.dest.pack(anchor="w")
+        self.dest = words(card, "", font=f(STRONG))
+        self.dest.pack(fill="x")
         row = ttk.Frame(card)
         row.pack(fill="x", pady=(px(12), 0))
         self.b_save = ttk.Button(row, text="Save the request page…", style="Accent.TButton",
@@ -42,22 +48,21 @@ class ShareTab:
                                    command=self.copy_invite)
         self.b_invite.pack(side="left")
 
-        ttk.Label(self.frame, text="Or by plain email", font=f(STRONG)).pack(
+        ttk.Label(page, text="Or by plain email", font=f(STRONG)).pack(
             anchor="w", pady=(px(22), px(4)))
-        self.plain = ttk.Label(self.frame, wraplength=px(960), justify="left")
-        self.plain.pack(anchor="w")
-        ttk.Label(self.frame, wraplength=px(960), justify="left", foreground=pal["muted"],
-                  text="Tip: re-save the page if you change your name, the mailbox or the "
-                       "request subject in Settings.").pack(anchor="w", pady=(px(18), 0))
+        self.plain = words(page, "")
+        self.plain.pack(fill="x")
+        words(page, "Tip: re-save the page if you change your name, the mailbox or the request "
+                    "subject in Settings.", foreground=pal["muted"]).pack(fill="x",
+                                                                         pady=(px(18), 0))
 
-        ttk.Label(self.frame, text="Colleague with institute access of their own?",
-                  font=f(SUBTITLE)).pack(anchor="w", pady=(px(28), px(4)))
-        ttk.Label(self.frame, wraplength=px(960), justify="left", foreground=pal["muted"],
-                  text="They can run their own PaperBot. Save the installer, send it to them, "
-                       "and they unzip it and double-click \"Install PaperBot\". It contains "
-                       "only the program: none of your settings, passwords, requests or PDFs.").pack(
-            anchor="w")
-        ttk.Button(self.frame, text="Save the PaperBot installer (zip)…",
+        words(page, "Colleague with institute access of their own?",
+              font=f(SUBTITLE)).pack(fill="x", pady=(px(28), px(4)))
+        words(page, "They can run their own PaperBot. Save the installer, send it to them, and "
+                    "they unzip it and double-click \"Install PaperBot\". It contains only the "
+                    "program: none of your settings, passwords, requests or PDFs.",
+              foreground=pal["muted"]).pack(fill="x")
+        ttk.Button(page, text="Save the PaperBot installer (zip)…",
                    command=self.save_installer).pack(anchor="w", pady=(px(10), 0))
 
     def save_installer(self) -> None:

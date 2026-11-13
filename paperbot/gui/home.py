@@ -8,13 +8,22 @@ from tkinter import messagebox, ttk
 
 from .. import winsvc
 from ..app import has_mail_password
-from .base import BODY, DISPLAY, STRONG, SUBTITLE, f
+from .base import BODY, DISPLAY, STRONG, SUBTITLE, f, scroll_page, wrap_to_width
 
 LINE_RE = re.compile(r"^(\d{4}-\d\d-\d\d) (\d\d:\d\d):\d\d,\d+ (\w+) ([\w.]+): (.*)$")
 
 
 def text_colors(pal: dict) -> tuple[str, str]:
-    return ("#2b2b2b", "#e6e6e6") if pal["mode"] == "dark" else ("#ffffff", "#1a1a1a")
+    """(background, text colour) of the app's text areas in the theme in use."""
+    return pal["text_bg"], pal["text_fg"]
+
+
+def outline(area: tk.Text, pal: dict) -> None:
+    """A thin line around a text area whose background is the page's own (the high contrast
+    theme): without it nobody could see where the area is."""
+    if pal["text_bg"] == pal["bg"]:
+        area.configure(highlightthickness=1, highlightbackground=pal["border"],
+                       highlightcolor=pal["border"])
 
 
 def read_activity(path, limit: int = 80) -> list[tuple[str, str, str]]:
@@ -44,10 +53,10 @@ class HomeTab:
     def __init__(self, app, nb):
         self.app = app
         px, pal = app.px, app.pal
-        self.frame = ttk.Frame(nb, padding=px(18))
+        self.frame, page = scroll_page(nb, px(18))
 
         # -- setup checklist (hidden once everything is done)
-        self.setup = ttk.Frame(self.frame, style="Card.TFrame", padding=px(16))
+        self.setup = ttk.Frame(page, style="Card.TFrame", padding=px(16))
         ttk.Label(self.setup, text="Finish setting up", font=f(SUBTITLE)).grid(
             row=0, column=0, columnspan=2, sticky="w", pady=(0, px(6)))
         self.steps = []
@@ -65,7 +74,7 @@ class HomeTab:
                                                                sticky="e")
 
         # -- numbers
-        self.cards = ttk.Frame(self.frame)
+        self.cards = ttk.Frame(page)
         self.cards.pack(fill="x")
         self.stats, self.captions = {}, {}
         for i, (key, label, target) in enumerate([
@@ -78,8 +87,9 @@ class HomeTab:
             self.cards.columnconfigure(i, weight=1, uniform="cards")
             num = ttk.Label(card, text="–", font=f(DISPLAY))
             num.pack(anchor="w")
-            cap = ttk.Label(card, text=label, foreground=pal["muted"])
-            cap.pack(anchor="w")
+            cap = ttk.Label(card, text=label, foreground=pal["muted"], justify="left")
+            cap.pack(fill="x")
+            wrap_to_width(cap, least=px(60))
             for w in (card, num, cap):
                 w.bind("<Button-1>", lambda e, t=target: app.show(t))
                 w.configure(cursor="hand2")
@@ -87,60 +97,69 @@ class HomeTab:
             self.captions[key] = cap
 
         # -- automatic mode
-        auto = ttk.Frame(self.frame, style="Card.TFrame", padding=px(16))
+        auto = ttk.Frame(page, style="Card.TFrame", padding=px(16))
         auto.pack(fill="x", pady=(px(14), 0))
+        self.auto_btn = ttk.Button(auto, text="Turn on", style="Accent.TButton", width=12,
+                                   command=self.toggle_auto)
+        self.auto_btn.pack(side="right", padx=(px(12), 0))
         left = ttk.Frame(auto)
         left.pack(side="left", fill="x", expand=True)
         ttk.Label(left, text="Automatic mode", font=f(SUBTITLE)).pack(anchor="w")
-        self.auto_text = ttk.Label(left, text="Checking…", justify="left",
-                                   wraplength=px(720))
-        self.auto_text.pack(anchor="w", pady=(px(4), 0))
-        self.auto_btn = ttk.Button(auto, text="Turn on", style="Accent.TButton", width=12,
-                                   command=self.toggle_auto)
-        self.auto_btn.pack(side="right")
+        self.auto_text = ttk.Label(left, text="Checking…", justify="left")
+        self.auto_text.pack(fill="x", pady=(px(4), 0))
+        wrap_to_width(self.auto_text)
 
         # -- the app itself, opened when Windows starts
-        start = ttk.Frame(self.frame)
+        start = ttk.Frame(page)
         start.pack(fill="x", pady=(px(10), 0))
         self.start_var = tk.BooleanVar(value=False)
         ttk.Checkbutton(start, style="Switch.TCheckbutton", variable=self.start_var,
                         text="Open PaperBot in the taskbar a minute after I sign in to Windows",
                         command=self.toggle_app_start).pack(side="left")
-        ttk.Label(start, text="so it is at hand when a paper needs you",
-                  foreground=pal["muted"]).pack(side="left", padx=px(12))
+        hint = ttk.Label(start, text="so it is at hand when a paper needs you",
+                         foreground=pal["muted"], justify="left")
+        hint.pack(side="left", fill="x", expand=True, padx=px(12))
+        wrap_to_width(hint)
 
         # -- notifications are wanted, but Windows is set to show none (shown only then)
-        notify_row = ttk.Frame(self.frame)
+        notify_row = ttk.Frame(page)
         notify_row.pack(fill="x")
-        self.notify_text = ttk.Label(notify_row, text="", justify="left", wraplength=px(1040),
+        self.notify_text = ttk.Label(notify_row, text="", justify="left",
                                      foreground=pal["warn"], cursor="hand2")
         self.notify_text.bind("<Button-1>", lambda e: app.open_windows_notification_settings())
+        wrap_to_width(self.notify_text, most=px(1100))
 
         # -- working together with PaperBot on another computer (shown once that is on)
-        self.together_row = ttk.Frame(self.frame)
+        self.together_row = ttk.Frame(page)
         self.together_row.pack(fill="x")
         self.together_text = ttk.Label(self.together_row, text="", justify="left",
-                                       wraplength=px(1040), cursor="hand2")
+                                       cursor="hand2")
         self.together_text.bind("<Button-1>", lambda e: app.show("settings"))
+        wrap_to_width(self.together_text, most=px(1100))
 
         # -- check now
-        row = ttk.Frame(self.frame)
+        row = ttk.Frame(page)
         row.pack(fill="x", pady=(px(14), px(4)))
         ttk.Button(row, text="Check mail now", command=self.check_now).pack(side="left")
-        ttk.Label(row, text="reads new requests, fetches the papers and replies right away",
-                  foreground=pal["muted"]).pack(side="left", padx=px(12))
+        hint = ttk.Label(row, text="reads new requests, fetches the papers and replies right "
+                                   "away", foreground=pal["muted"], justify="left")
+        hint.pack(side="left", fill="x", expand=True, padx=px(12))
+        wrap_to_width(hint)
 
-        # -- activity
-        ttk.Label(self.frame, text="Recent activity", font=f(STRONG)).pack(
+        # -- activity (takes the room that is left; a few lines at least)
+        ttk.Label(page, text="Recent activity", font=f(STRONG)).pack(
             anchor="w", pady=(px(10), px(4)))
-        box = ttk.Frame(self.frame)
+        box = ttk.Frame(page)
         box.pack(fill="both", expand=True)
         bg, fg = text_colors(pal)
-        self.log = tk.Text(box, height=8, wrap="word", relief="flat", borderwidth=0,
+        self.log = tk.Text(box, height=5, wrap="word", relief="flat", borderwidth=0,
                            background=bg, foreground=fg, font=f(BODY),
                            padx=px(12), pady=px(8), cursor="arrow")
         bar = ttk.Scrollbar(box, orient="vertical", command=self.log.yview)
         self.log.configure(yscrollcommand=bar.set, state="disabled")
+        outline(self.log, pal)
+        # It is given its room after it was filled: keep the newest line, the last, in view.
+        self.log.bind("<Configure>", lambda e: self.log.see("end"))
         self.log.tag_configure("time", foreground=pal["muted"])
         self.log.tag_configure("WARNING", foreground=pal["warn"])
         self.log.tag_configure("ERROR", foreground=pal["bad"])
@@ -204,7 +223,7 @@ class HomeTab:
         if blocked:
             self.notify_text.configure(text="PaperBot can't show you a notification when a paper "
                                             f"needs you: {blocked} Click here to open that page.")
-            self.notify_text.pack(anchor="w", pady=(app.px(10), 0))
+            self.notify_text.pack(fill="x", pady=(app.px(10), 0))
         else:
             self.notify_text.pack_forget()
 
@@ -221,7 +240,7 @@ class HomeTab:
             note, color = "", pal["muted"]
         if note:
             self.together_text.configure(text=note, foreground=color)
-            self.together_text.pack(anchor="w", pady=(app.px(10), 0))
+            self.together_text.pack(fill="x", pady=(app.px(10), 0))
         else:
             self.together_text.pack_forget()
 
